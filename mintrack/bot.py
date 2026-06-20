@@ -36,44 +36,71 @@ logger = logging.getLogger("mintrack.bot")
 
 MAX_MSG_LEN = 4000  # límite seguro bajo los 4096 chars de Telegram
 
+# (clave_en_modelo, etiqueta legible). Las fechas se formatean legiblemente.
 LABELS = [
     ("codigo_exp", "Código expediente"),
-    ("estado_exp", "Estado"),
-    ("modalidade", "Modalidad"),
+    ("titulo_est", "Estado"),
     ("etapa", "Etapa"),
+    ("modalidad", "Modalidad"),
+    ("clasificac", "Clasificación de minería"),
     ("minerales", "Minerales"),
+    ("minerales_", "Minerales inactivos"),
+    ("departamen", "Departamento"),
     ("municipios", "Municipios"),
-    ("departamento", "Departamento"),
-    ("solicitante", "Solicitante / Titular"),
-    ("grupo_trab", "Grupo de trabajo"),
     ("area_ha", "Área (ha)"),
-    ("fecha_insc", "Fecha inscripción"),
-    ("fecha_term", "Fecha terminación"),
-    ("tipo_explo", "Tipo de explotación"),
-    ("capaminera", "Capa minera"),
-    ("producto", "Producto"),
+    ("centroid_c", "Centroide (lon, lat)"),
+    ("solicitant", "Solicitantes / Titulares"),
+    ("par", "PAR / Grupo de trabajo"),
+    ("fecha_de_s", "Fecha de solicitud"),
+    ("fecha_de_e", "Fecha de expedición"),
+    ("fecha_de_a", "Fecha de aniversario"),
+    ("fecha_de01", "Fecha de expiración"),
+    ("publicado_", "Publicado en RUCOM"),
+    ("tipo_termi", "Tipo de terminación"),
 ]
+
+DATE_KEYS = {"fecha_de_s", "fecha_de_e", "fecha_de_a", "fecha_de01"}
+
+
+def _fmt_fecha(value):
+    """Convierte un datetime/ISO a 'YYYY-MM-DD' para mostrar en Telegram."""
+    if not value:
+        return value
+    try:
+        from datetime import datetime
+        if isinstance(value, datetime):
+            return value.strftime("%Y-%m-%d")
+        # ISO string desde to_dict()
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return dt.strftime("%Y-%m-%d")
+    except (ValueError, TypeError):
+        return value
 
 
 def _formatar_titulo(t: TituloMinero) -> str:
     data = t.to_dict()
-    lines = [f"*{t.codigo_exp}*"]
+    head = t.codigo_exp or t.tenure_id or "(sin código)"
+    lines = [f"=== {head} ==="]
     for key, label in LABELS:
         value = data.get(key)
         if value is None or value == "":
             continue
+        if key in DATE_KEYS:
+            value = _fmt_fecha(value)
+            if not value:
+                continue
         lines.append(f"• {label}: {value}")
     if t.geometry:
-        lines.append("• Geometría: incluida (polígono MAGNA-SIRGAS, SR 4686)")
+        lines.append("• Geometría: incluida (polígono; usa /exp ... --format geojson para coords)")
     return "\n".join(lines)
 
 
 async def cmd_start(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "Hola 👋 Soy MinTrack, un bot para consultar *títulos mineros vigentes de "
-        "Colombia* a partir del código del expediente.\n\n"
+        "Hola 👋 Soy MinTrack, un bot para consultar *títulos mineros de "
+        "Colombia* a partir del código del expediente (fuente ANNA Minería / ANM).\n\n"
         "Comandos:\n"
-        "/exp <código> — consulta exacta (p. ej. /exp TGU-14471)\n"
+        "/exp <código> — consulta exacta (p. ej. /exp ICQ-09083)\n"
         "/buscar <texto> — búsqueda parcial por código\n"
         "/help — ayuda detallada",
         parse_mode=ParseMode.MARKDOWN,
@@ -82,15 +109,17 @@ async def cmd_start(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def cmd_help(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "*MinTrack* — consulta de títulos mineros de la ANM\n\n"
+        "*MinTrack* — consulta de títulos mineros de la ANM (Colombia)\n\n"
         "*/exp <código>*: devuelve los datos del título cuyo código de expediente "
-        "coincide exactamente. Formato del código: AAA-##### (ej. TGU-14471, "
-        "TGV-08021, RIL-12181).\n\n"
+        "coincide exactamente. Formato del código: AAA-##### (ej. ICQ-09083, "
+        "TGU-14471, RIL-12181).\n\n"
         "*/buscar <texto>*: lista títulos cuyo código contiene el texto (útil si no "
         "recuerdas el código exacto).\n\n"
-        "_Fuente:_ geoservicio público de títulos vigentes de la ANM "
-        "(gisanm.anm.gov.co). Solo incluye títulos _vigentes_; los expedientes en "
-        "trámite o archivados no aparecen.",
+        "Datos mostrados: estado, etapa, modalidad, clasificación, minerales, "
+        "departamento, municipios, área, centroide, titulares, fechas de "
+        "solicitud/expedición/aniversario/expiración y más.\n\n"
+        "_Fuente:_ geoservicio público de la ANM (gisanm.anm.gov.co), misma capa que "
+        "alimenta el visor ANNA Minería. Incluye títulos vigentes y otros estados.",
         parse_mode=ParseMode.MARKDOWN,
     )
 
@@ -124,7 +153,7 @@ async def cmd_exp(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         text = _formatar_titulo(t)
         if len(text) > MAX_MSG_LEN:
             text = text[: MAX_MSG_LEN - 20] + "\n…(truncado)"
-        await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(text)
 
 
 async def cmd_buscar(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -151,7 +180,8 @@ async def cmd_buscar(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     lines = [f"Se encontraron {len(titulos)} título(s) para '{texto}':"]
     for t in titulos:
         lines.append(
-            f"• {t.codigo_exp} — {t.departamento} / {t.municipios} — {t.etapa}"
+            f"• {t.codigo_exp or t.tenure_id} — {t.departamen} / {t.municipios} — "
+            f"{t.titulo_est} | {t.etapa}"
         )
     text = "\n".join(lines)
     if len(text) > MAX_MSG_LEN:

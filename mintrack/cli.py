@@ -8,41 +8,56 @@ import sys
 from typing import Sequence
 
 from .client import ANMClient, ANMError
-from .geo import arcgis_feature_to_geojson, titulos_to_feature_collection
+from .geo import titulos_to_feature_collection
 
-LABELS = {
-    "codigo_exp": "Código expediente",
-    "estado_exp": "Estado",
-    "modalidade": "Modalidad",
-    "etapa": "Etapa",
-    "minerales": "Minerales",
-    "municipios": "Municipios",
-    "departamento": "Departamento",
-    "solicitante": "Solicitante / Titular",
-    "grupo_trab": "Grupo de trabajo",
-    "area_ha": "Área (ha)",
-    "fecha_insc": "Fecha inscripción",
-    "fecha_term": "Fecha terminación",
-    "tipo_explo": "Tipo de explotación",
-    "capaminera": "Capa minera",
-    "producto": "Producto",
-    "fid": "FID",
-    "shape_area": "Área geométrica (grados²)",
-    "shape_length": "Longitud geométrica (grados)",
-}
+# (clave_en_modelo, etiqueta legible). Orden de presentación.
+LABELS = [
+    ("codigo_exp", "Código expediente"),
+    ("tenure_id", "TENURE_ID"),
+    ("titulo_est", "Estado del título"),
+    ("etapa", "Etapa"),
+    ("modalidad", "Modalidad"),
+    ("clasificac", "Clasificación de minería"),
+    ("minerales", "Minerales"),
+    ("minerales_", "Minerales inactivos"),
+    ("departamen", "Departamento"),
+    ("municipios", "Municipios"),
+    ("area_ha", "Área (ha)"),
+    ("centroid_c", "Centroide (lon, lat)"),
+    ("solicitant", "Solicitantes / Titulares"),
+    ("par", "PAR / Grupo de trabajo"),
+    ("fecha_de_s", "Fecha de solicitud"),
+    ("fecha_de_e", "Fecha de expedición"),
+    ("fecha_de_a", "Fecha de aniversario"),
+    ("fecha_de01", "Fecha de expiración"),
+    ("publicado_", "Publicado en RUCOM"),
+    ("tenure_sta", "Código de estado (TENURE_STATUS)"),
+    ("tenure_s01", "Código de etapa (TENURE_STAGE)"),
+    ("title_type", "Código de tipo (TITLE_TYPE)"),
+    ("mining_cla", "Código clasificación (MINING_CLASS)"),
+    ("active_ten", "Indicador título activo"),
+    ("active_app", "Indicador solicitud activa"),
+    ("tipo_termi", "Tipo de terminación"),
+    ("terminatio", "Código tipo terminación"),
+    ("objectid", "OBJECTID"),
+    ("fid", "FID"),
+    ("shape_area", "Área geométrica (m² aprox.)"),
+    ("shape_length", "Longitud geométrica (m aprox.)"),
+]
 
 
 def _formatar_titulo(titulo, show_geom: bool) -> str:
     lines: list[str] = []
-    lines.append(f"=== Título minero: {titulo.codigo_exp} ===")
+    head = titulo.codigo_exp or titulo.tenure_id or "(sin código)"
+    lines.append(f"=== Título minero: {head} ===")
     data = titulo.to_dict()
-    for key, label in LABELS.items():
+    for key, label in LABELS:
         value = data.get(key)
         if value is None or value == "":
             continue
         lines.append(f"{label}: {value}")
     if show_geom and titulo.geometry:
-        lines.append("Geometría: incluida (polígono en MAGNA-SIRGAS, SR 4686)")
+        lines.append("Geometría: incluida (polígono; ver GeoJSON para coordenadas)")
     return "\n".join(lines)
 
 
@@ -99,8 +114,8 @@ def cmd_buscar(args: argparse.Namespace) -> int:
         print(f"Se encontraron {len(titulos)} título(s):")
         for t in titulos:
             print(
-                f"- {t.codigo_exp} | {t.departamento} | {t.municipios} | "
-                f"{t.modalidade} | {t.etapa}"
+                f"- {t.codigo_exp or t.tenure_id} | {t.departamen} | {t.municipios} | "
+                f"{t.titulo_est} | {t.etapa}"
             )
     return 0
 
@@ -109,15 +124,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mintrack",
         description=(
-            "Consulta títulos mineros vigentes de Colombia a partir del código "
-            "de expediente, usando los geoservicios públicos de la ANM."
+            "Consulta títulos mineros de Colombia a partir del código de "
+            "expediente, usando los geoservicios públicos de la ANM (fuente ANNA "
+            "Minería)."
         ),
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_consultar = sub.add_parser(
         "consultar",
-        help="Consulta exacta por código de expediente (ej. TGU-14471).",
+        help="Consulta exacta por código de expediente (ej. ICQ-09083).",
     )
     p_consultar.add_argument("codigo", help="Código de expediente (formato AAA-#####).")
     p_consultar.add_argument(
