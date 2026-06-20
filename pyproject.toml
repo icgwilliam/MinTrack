@@ -12,11 +12,11 @@ license = { text = "MIT" }
 authors = [{ name = "MinTrack" }]
 dependencies = [
     "requests>=2.31.0",
-    "python-telegram-bot>=21.0,<23.0",
+    "python-telegram-bot[job-queue]>=21.0,<23.0",
 ]
 
 [project.optional-dependencies]
-bot = ["python-telegram-bot>=21.0,<23.0"]
+bot = ["python-telegram-bot[job-queue]>=21.0,<23.0"]
 
 [project.scripts]
 mintrack = "mintrack.cli:main"

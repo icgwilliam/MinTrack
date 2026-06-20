@@ -33,9 +33,10 @@ from telegram.ext import (
 )
 
 from .client import ANMClient, ANMError
-from .db import Database
+from .db import Database, ESTADO_COMPLETADO
 from .menu import SERVICIOS_NOMBRES
 from .models import TituloMinero
+from . import centinela as C
 from . import menu as M
 
 logging.basicConfig(
@@ -182,6 +183,13 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await _iniciar_consulta_titulo(update, ctx)
     elif data == M.CB_SUBIR:
         await _mostrar_subir_documentos(update, ctx)
+    elif data == M.CB_CENTINELA:
+        await _iniciar_suscripcion(update, ctx)
+    elif data == M.CB_MIS_SUBS:
+        await _mostrar_suscripciones(update, ctx)
+    elif data.startswith(M.CB_DESUSCRIBIR_PREFIX):
+        codigo = data[len(M.CB_DESUSCRIBIR_PREFIX):]
+        await _desuscribir(update, ctx, codigo)
     # CB_INICIAR y CB_CANCELAR se manejan en el ConversationHandler.
 
 
@@ -219,6 +227,7 @@ async def _mostrar_estado(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
 # El usuario entra a "Consultar título minero", se le pide el código por chat.
 # Guardamos un flag en user_data para capturar el próximo mensaje de texto.
 FLAG_CONSULTA = "esperando_codigo_titulo"
+FLAG_SUSCRIPCION = "esperando_codigo_suscripcion"
 
 
 async def _iniciar_consulta_titulo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -239,7 +248,7 @@ async def on_texto(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """Captura mensajes de texto fuera del wizard.
 
     Si el usuario está esperando para escribir el código de un título, lo
-    consulta; si no, muestra el menú.
+    consulta; si está esperando para suscribirse, lo hace; si no, muestra el menú.
     """
     if ctx.user_data.get(FLAG_CONSULTA):
         ctx.user_data[FLAG_CONSULTA] = False
@@ -253,8 +262,104 @@ async def on_texto(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await _consultar_titulo(update, ctx, codigo)
         return
 
+    if ctx.user_data.get(FLAG_SUSCRIPCION):
+        ctx.user_data[FLAG_SUSCRIPCION] = False
+        codigo = (update.message.text or "").strip()
+        if not codigo:
+            await update.message.reply_text(
+                "Código vacío. Inténtalo de nuevo o usa /menu.",
+                reply_markup=M.menu_principal_kb(),
+            )
+            return
+        await _suscribir(update, ctx, codigo)
+        return
+
     # En cualquier otro caso, reenvía el menú.
     await update.message.reply_text(M.TEXTO_MENU, reply_markup=M.menu_principal_kb())
+
+
+# --- Centinela (suscripciones a expedientes) -----------------------------
+
+async def _iniciar_suscripcion(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    ctx.user_data[FLAG_SUSCRIPCION] = True
+    await _editar_menu(query, M.TEXTO_CENTINELA, M.centinela_kb())
+
+
+async def _suscribir(update: Update, ctx: ContextTypes.DEFAULT_TYPE, codigo: str) -> None:
+    client = _get_client(ctx)
+    db = _get_db(ctx)
+    user_id = update.effective_user.id
+
+    # Verificar que el expediente existe antes de suscribir.
+    try:
+        titulos = await asyncio.to_thread(
+            client.consultar_por_expediente, codigo, return_geometry=False
+        )
+    except ANMError as exc:
+        await update.message.reply_text(f"⚠️ Error consultando la ANM: {exc}")
+        return
+
+    if not titulos:
+        await update.message.reply_text(
+            f"No se encontró el título '{codigo}'. No se pudo suscribir.",
+            reply_markup=M.menu_principal_kb(),
+        )
+        return
+
+    creado = db.suscribir(user_id, codigo)
+    # Guarda snapshot inicial si no existe.
+    if db.obtener_snapshot(codigo) is None:
+        C.actualizar_snapshot(db, titulos[0])
+
+    if creado:
+        msg = (
+            f"✅ Te suscribiste a *{codigo}*.\n\nNotificaré automáticamente "
+            "cambios de área (liberaciones), estado, etapa y vencimientos próximos."
+        )
+    else:
+        msg = f"ℹ️ Ya estabas suscrito a *{codigo}*. Suscripción reactivada."
+    await update.message.reply_text(
+        msg, parse_mode=ParseMode.MARKDOWN, reply_markup=M.menu_principal_kb()
+    )
+
+
+async def _mostrar_suscripciones(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    db = _get_db(ctx)
+    subs = db.listar_suscripciones(update.effective_user.id)
+    if not subs:
+        await _editar_menu(
+            query,
+            "🔔 *Centinela*\n\nNo tienes suscripciones activas.\n\n"
+            "Pulsa *🔔 Centinela* para suscribirte a un expediente.",
+            M.centinela_kb(),
+        )
+        return
+    lines = ["🔔 *Tus suscripciones activas:*"]
+    rows: list[list[InlineKeyboardButton]] = []
+    for s in subs:
+        snap = db.obtener_snapshot(s.codigo_exp)
+        estado = snap.titulo_est if snap else "—"
+        area = f"{snap.area_ha:.2f} ha" if snap and snap.area_ha is not None else "—"
+        lines.append(f"• {s.codigo_exp} — {estado} — {area}")
+        rows.append(
+            [InlineKeyboardButton(f"🔕 Cancelar {s.codigo_exp}",
+                                  callback_data=f"{M.CB_DESUSCRIBIR_PREFIX}{s.codigo_exp}")]
+        )
+    kb = M._con_volver(rows)
+    await _editar_menu(query, "\n".join(lines), kb)
+
+
+async def _desuscribir(update: Update, ctx: ContextTypes.DEFAULT_TYPE, codigo: str) -> None:
+    query = update.callback_query
+    db = _get_db(ctx)
+    ok = db.desuscribir(update.effective_user.id, codigo)
+    if ok:
+        await query.answer(f"Suscripción a {codigo} cancelada.", show_alert=True)
+    else:
+        await query.answer(f"No tenías suscripción activa a {codigo}.", show_alert=True)
+    await _mostrar_suscripciones(update, ctx)
 
 
 async def _consultar_titulo(update: Update, ctx: ContextTypes.DEFAULT_TYPE, codigo: str) -> None:
@@ -491,6 +596,76 @@ async def wizard_cancelar(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
     return ConversationHandler.END
 
 
+# --- Scheduler: notificaciones proactivas --------------------------------
+
+async def job_revisar_suscripciones(ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Revisa todas las suscripciones activas, compara con snapshots y avisa."""
+    app = ctx.application
+    db: Database = app.bot_data["db"]
+    client: ANMClient = app.bot_data["anm_client"]
+
+    subs_por_exp = db.suscripciones_activas_por_exp()
+    if not subs_por_exp:
+        return
+
+    logger.info("Centinela: revisando %d expediente(s) suscritos.", len(subs_por_exp))
+
+    for codigo, user_ids in subs_por_exp.items():
+        try:
+            titulos = await asyncio.to_thread(
+                client.consultar_por_expediente, codigo, return_geometry=False
+            )
+        except ANMError as exc:
+            logger.warning("Centinela: error consultando %s: %s", codigo, exc)
+            continue
+
+        if not titulos:
+            continue
+
+        t = titulos[0]
+        snap_previo = db.obtener_snapshot(codigo)
+        eventos = C.comparar(t, snap_previo)
+        C.actualizar_snapshot(db, t)
+
+        if not eventos:
+            continue
+
+        for ev in eventos:
+            for uid in user_ids:
+                try:
+                    await app.bot.send_message(chat_id=uid, text=ev.mensaje)
+                except Exception as exc:  # user bloqueó el bot, etc.
+                    logger.warning("Centinela: no se pudo notificar a %s: %s", uid, exc)
+
+
+async def job_avanzar_solicitudes(ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Avanza estados de solicitudes internas por tiempo y notifica al usuario."""
+    app = ctx.application
+    db: Database = app.bot_data["db"]
+
+    for user_id in db.listar_user_ids_con_solicitud():
+        sol = db.obtener_solicitud(user_id)
+        if not sol or sol.estado == ESTADO_COMPLETADO:
+            continue
+        estado_antes = sol.estado
+        sol_actualizada = db.sincronizar_estado(user_id)
+        if not sol_actualizada or sol_actualizada.estado == estado_antes:
+            continue
+        try:
+            await app.bot.send_message(
+                chat_id=user_id,
+                text=(
+                    f"📊 Actualización de tu solicitud #{sol_actualizada.id} "
+                    f"({SERVICIOS_NOMBRES.get(sol_actualizada.servicio, sol_actualizada.servicio)}):\n"
+                    f"Estado: *{sol_actualizada.estado_label}*.\n"
+                    f"Vigente desde: {Database.fmt_fecha(sol_actualizada.estado_desde)}."
+                ),
+                parse_mode=ParseMode.MARKDOWN,
+            )
+        except Exception as exc:
+            logger.warning("No se pudo notificar avance a %s: %s", user_id, exc)
+
+
 # --- Construcción de la aplicación ---------------------------------------
 
 def build_application(
@@ -546,6 +721,17 @@ def build_application(
 
     # Texto libre (captura código de título o reenvía menú). Debe ir al final.
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_texto))
+
+    # --- Scheduler (jobs periódicos del centinela) ------------------------
+    # Revisa las suscripciones activas contra la ANM y notifica cambios.
+    # La frecuencia se controla con la variable de entorno MINTRACK_CENTINELA_MIN
+    # (por defecto 30 min). En GitHub Actions el job puede tardar en arrancar;
+    # esto es lo mejor posible dentro de esas restricciones.
+    intervalo = max(int(os.environ.get("MINTRACK_CENTINELA_MIN", "30")), 5)
+    jq = app.job_queue
+    if jq is not None:
+        jq.run_repeating(job_revisar_suscripciones, interval=intervalo * 60, first=60)
+        jq.run_repeating(job_avanzar_solicitudes, interval=60, first=30)
 
     return app
 

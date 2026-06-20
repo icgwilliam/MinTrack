@@ -29,8 +29,13 @@ CB_INICIAR = "ini"
 CB_SUBIR = "sub"
 CB_ESTADO = "est"
 CB_CONSULTAR = "con"          # consultar título minero
+CB_CENTINELA = "cnt"          # suscribirse / mis suscripciones (menú centinela)
+CB_MIS_SUBS = "cnt_mis"
 CB_VOLVER = "back"
 CB_CANCELAR = "cancel"
+
+# Prefijos para cancelar una suscripción concreta desde "mis suscripciones".
+CB_DESUSCRIBIR_PREFIX = "cnt_del_"
 
 
 # --- Servicios y precios (datos de negocio) ------------------------------
@@ -84,6 +89,7 @@ def menu_principal_kb() -> InlineKeyboardMarkup:
             [InlineKeyboardButton("📄 Subir documentos", callback_data=CB_SUBIR)],
             [InlineKeyboardButton("📊 Estado de proceso", callback_data=CB_ESTADO)],
             [InlineKeyboardButton("⛏️ Consultar título minero", callback_data=CB_CONSULTAR)],
+            [InlineKeyboardButton("🔔 Centinela (suscribir)", callback_data=CB_CENTINELA)],
         ]
     )
 
@@ -128,6 +134,22 @@ def estado_kb() -> InlineKeyboardMarkup:
 
 def consultar_kb() -> InlineKeyboardMarkup:
     return _con_volver([])
+
+
+def centinela_kb() -> InlineKeyboardMarkup:
+    return _con_volver(
+        [
+            [InlineKeyboardButton("📋 Mis suscripciones", callback_data=CB_MIS_SUBS)],
+        ]
+    )
+
+
+def desuscribir_kb(codigo_exp: str) -> InlineKeyboardMarkup:
+    """Keyboard con un botón para cancelar la suscripción a un expediente."""
+    return _con_volver(
+        [[InlineKeyboardButton(f"🔕 Cancelar suscripción a {codigo_exp}",
+                               callback_data=f"{CB_DESUSCRIBIR_PREFIX}{codigo_exp}")]]
+    )
 
 
 def cancelar_kb() -> InlineKeyboardMarkup:
@@ -175,6 +197,18 @@ TEXTO_PRECIOS_MAS = (
     "y seguimiento del expediente hasta inscripción.\n\n"
     "• *Centinela ($2.790.000 inicial + $1.320.000 diario):* monitoreo 24/7, "
     "alertas de vencimientos/novedades y reportes periódicos.\n"
+)
+
+TEXTO_CENTINELA = (
+    "🔔 *Centinela*\n\n"
+    "Suscríbete a un código de expediente para recibir notificaciones "
+    "automáticas cuando:\n"
+    "• Se libere parte del área del título (reducción de ha).\n"
+    "• Cambie el estado del título (ej. Activo → En liquidación).\n"
+    "• Cambie la etapa (ej. Exploración → Explotación).\n"
+    "• Se acerque el vencimiento (<=30 días).\n\n"
+    "Para suscribirte escribe el código del expediente "
+    "(formato AAA-#####, ej. ICQ-09083)."
 )
 
 

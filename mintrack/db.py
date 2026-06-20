@@ -91,6 +91,34 @@ CREATE TABLE IF NOT EXISTS documentos (
 
 CREATE INDEX IF NOT EXISTS idx_documentos_solicitud ON documentos(solicitud_id);
 CREATE INDEX IF NOT EXISTS idx_documentos_user ON documentos(user_id);
+
+-- Suscripciones de usuarios a expedientes para monitoreo (centinela).
+CREATE TABLE IF NOT EXISTS suscripciones (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    codigo_exp TEXT NOT NULL,
+    activa INTEGER NOT NULL DEFAULT 1,
+    created_at REAL NOT NULL,
+    UNIQUE(user_id, codigo_exp)   -- una suscripción activa por (usuario, exp)
+);
+
+CREATE INDEX IF NOT EXISTS idx_suscripciones_activas ON suscripciones(codigo_exp) WHERE activa = 1;
+
+-- Snapshot del último estado conocido de un expediente (para detectar cambios).
+-- Un expediente puede tener varios snapshots; se guarda el más reciente por
+-- codigo_exp. Se usa una fila por codigo_exp (upsert).
+CREATE TABLE IF NOT EXISTS snapshots (
+    codigo_exp TEXT PRIMARY KEY,
+    area_ha REAL,
+    titulo_est TEXT,
+    etapa TEXT,
+    modalidad TEXT,
+    fecha_de_e REAL,            -- fecha de expedición (epoch)
+    fecha_de01 REAL,            -- fecha de expiración (epoch)
+    visto_en REAL NOT NULL      -- timestamp de la última revisión
+);
+
+CREATE INDEX IF NOT EXISTS idx_suscripciones_user ON suscripciones(user_id);
 """
 
 
@@ -109,6 +137,27 @@ class Solicitud:
     @property
     def estado_label(self) -> str:
         return ESTADO_LABELS.get(self.estado, self.estado)
+
+
+@dataclass
+class Suscripcion:
+    id: int
+    user_id: int
+    codigo_exp: str
+    activa: int
+    created_at: float
+
+
+@dataclass
+class Snapshot:
+    codigo_exp: str
+    area_ha: Optional[float]
+    titulo_est: Optional[str]
+    etapa: Optional[str]
+    modalidad: Optional[str]
+    fecha_de_e: Optional[float]
+    fecha_de01: Optional[float]
+    visto_en: float
 
 
 class Database:
@@ -279,6 +328,103 @@ class Database:
                 "SELECT * FROM documentos WHERE user_id = ? ORDER BY created_at",
                 (user_id,),
             ).fetchall()
+
+    def listar_user_ids_con_solicitud(self) -> list[int]:
+        """User_ids que tienen una solicitud (cualquier estado)."""
+        with self._cursor() as cur:
+            rows = cur.execute(
+                "SELECT user_id FROM solicitudes"
+            ).fetchall()
+        return [int(r["user_id"]) for r in rows]
+
+    # ---- Suscripciones (centinela) ---------------------------------------
+
+    def suscribir(self, user_id: int, codigo_exp: str) -> bool:
+        """Crea o reactiva la suscripción de un usuario a un expediente.
+
+        Devuelve True si se creó (nueva) o False si ya existía (reactivada).
+        """
+        codigo_exp = (codigo_exp or "").strip()
+        now = time.time()
+        with self._cursor() as cur:
+            existing = cur.execute(
+                "SELECT id, activa FROM suscripciones WHERE user_id=? AND codigo_exp=?",
+                (user_id, codigo_exp),
+            ).fetchone()
+            if existing:
+                if existing["activa"] == 1:
+                    return False
+                cur.execute(
+                    "UPDATE suscripciones SET activa=1 WHERE id=?",
+                    (existing["id"],),
+                )
+                return False
+            cur.execute(
+                "INSERT INTO suscripciones (user_id, codigo_exp, activa, created_at) "
+                "VALUES (?, ?, 1, ?)",
+                (user_id, codigo_exp, now),
+            )
+            return True
+
+    def desuscribir(self, user_id: int, codigo_exp: str) -> bool:
+        """Desactiva la suscripción. Devuelve True si existía y estaba activa."""
+        with self._cursor() as cur:
+            cur.execute(
+                "UPDATE suscripciones SET activa=0 WHERE user_id=? AND codigo_exp=? AND activa=1",
+                (user_id, codigo_exp),
+            )
+            return cur.rowcount > 0
+
+    def listar_suscripciones(self, user_id: int) -> list[Suscripcion]:
+        with self._cursor() as cur:
+            rows = cur.execute(
+                "SELECT * FROM suscripciones WHERE user_id=? AND activa=1 "
+                "ORDER BY created_at",
+                (user_id,),
+            ).fetchall()
+        return [Suscripcion(**dict(r)) for r in rows]
+
+    def suscripciones_activas_por_exp(self) -> dict[str, list[int]]:
+        """Devuelve {codigo_exp: [user_ids]} de todas las suscripciones activas."""
+        with self._cursor() as cur:
+            rows = cur.execute(
+                "SELECT user_id, codigo_exp FROM suscripciones WHERE activa=1"
+            ).fetchall()
+        out: dict[str, list[int]] = {}
+        for r in rows:
+            out.setdefault(r["codigo_exp"], []).append(r["user_id"])
+        return out
+
+    # ---- Snapshots (detección de cambios en la ANM) -----------------------
+
+    def obtener_snapshot(self, codigo_exp: str) -> Optional[Snapshot]:
+        with self._cursor() as cur:
+            row = cur.execute(
+                "SELECT * FROM snapshots WHERE codigo_exp=? LIMIT 1",
+                (codigo_exp,),
+            ).fetchone()
+        if not row:
+            return None
+        return Snapshot(**dict(row))
+
+    def guardar_snapshot(self, snap: Snapshot) -> None:
+        """Upsert del snapshot de un expediente."""
+        with self._cursor() as cur:
+            cur.execute(
+                """INSERT INTO snapshots
+                   (codigo_exp, area_ha, titulo_est, etapa, modalidad,
+                    fecha_de_e, fecha_de01, visto_en)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(codigo_exp) DO UPDATE SET
+                     area_ha=excluded.area_ha, titulo_est=excluded.titulo_est,
+                     etapa=excluded.etapa, modalidad=excluded.modalidad,
+                     fecha_de_e=excluded.fecha_de_e, fecha_de01=excluded.fecha_de01,
+                     visto_en=excluded.visto_en""",
+                (
+                    snap.codigo_exp, snap.area_ha, snap.titulo_est, snap.etapa,
+                    snap.modalidad, snap.fecha_de_e, snap.fecha_de01, snap.visto_en,
+                ),
+            )
 
     # ---- Utilidades -------------------------------------------------------
 

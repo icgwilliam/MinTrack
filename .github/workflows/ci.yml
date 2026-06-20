@@ -31,5 +31,15 @@ jobs:
           MINTRACK_DB_PATH: /tmp/mintrack_db_ci.db
         run: |
           python -c "from mintrack.db import Database; db=Database(); s=db.crear_solicitud(1,'E','C','+57 300','aplicacion'); assert s.estado=='EN_REVISION'; db.registrar_documento(1,'f','d.pdf','pdf'); db.sincronizar_estado(1); assert db.obtener_solicitud(1).estado=='EN_PROCESO'; print('DB state machine OK')"
+      - name: Suscripciones + centinela smoke test
+        env:
+          MINTRACK_DB_PATH: /tmp/mintrack_centinela_ci.db
+        run: |
+          python -c "from mintrack.db import Database; from mintrack.models import TituloMinero; from mintrack import centinela as C; db=Database(); assert db.suscribir(1,'ICQ-09083') is True; assert db.suscribir(1,'ICQ-09083') is False; assert db.suscribir(2,'ICQ-09083') is True; assert db.suscripciones_activas_por_exp()=={'ICQ-09083':[1,2]}; t_prev=TituloMinero(codigo_exp='ICQ-09083',area_ha=312.17,titulo_est='Activo',etapa='Explotacion',modalidad='CC'); C.actualizar_snapshot(db,t_prev); t_now=TituloMinero(codigo_exp='ICQ-09083',area_ha=280.0,titulo_est='Terminado',etapa='Explotacion'); evs=C.comparar(t_now,db.obtener_snapshot('ICQ-09083')); tipos=[e.tipo for e in evs]; assert 'liberacion_area' in tipos and 'cambio_estado' in tipos; assert db.desuscribir(1,'ICQ-09083') is True; print('centinela OK:', tipos)"
+      - name: Build con job_queue
+        env:
+          MINTRACK_DB_PATH: /tmp/mintrack_build_ci.db
+        run: |
+          python -c "import mintrack.bot; app=mintrack.bot.build_application('123:test'); assert app.job_queue is not None; print('job_queue OK')"
       - name: CLI help smoke test
         run: python -m mintrack.cli --help

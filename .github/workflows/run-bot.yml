@@ -1,15 +1,20 @@
 name: Run MinTrack Telegram Bot
 
-# Ejecuta el bot de Telegram en long-polling dentro de un runner de GitHub
-# Actions. Reinicia automáticamente según el cron.
+# Ejecuta el bot de Telegram (con menú, suscripciones y centinela) en
+# long-polling dentro de un runner de GitHub Actions. Reinicia según el cron.
+#
+# El bot incluye notificaciones proactivas (centinela): un job revisa las
+# suscripciones activas contra la ANM cada MINTRACK_CENTINELA_MIN minutos y
+# notifica liberaciones de área, cambios de estado/etapa y vencimientos.
 #
 # IMPORTANTE - limitaciones del plan gratuito de GitHub Actions:
 #   * Cada job dura máximo ~6h; GitHub lo cancela al superar ese límite.
 #   * 2.000 minutos/mes de cuota gratuita en cuentas personales.
 #   * GitHub puede pausar workflows que llevan >60 días sin commits en el repo.
-# Por eso el cron reinicia el bot periódicamente. Para un servicio realmente
-# 24/7 y estable, se recomienda un runner self-hosted o un servicio como
-# Railway/Render/Fly.io (todos con tier gratuito). Ver README.md.
+# Por eso el cron reinicia el bot periódicamente. Esto significa que las
+# notificaciones del centinela PUEDEN RETRASARSE horas (ventanas sin servicio).
+# Para un servicio realmente 24/7 y estable (notificaciones en tiempo real),
+# se recomienda un runner self-hosted o un PaaS/VPS. Ver README.md.
 
 on:
   schedule:
@@ -35,6 +40,8 @@ jobs:
       # Persistencia de la base de datos y documentos dentro del workspace.
       MINTRACK_DB_PATH: ${{ github.workspace }}/data/mintrack.db
       MINTRACK_DOC_DIR: ${{ github.workspace }}/data/docs
+      # Frecuencia del centinela (revisión de suscripciones), en minutos.
+      MINTRACK_CENTINELA_MIN: "30"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
