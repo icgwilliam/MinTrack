@@ -1,0 +1,59 @@
+name: Run MinTrack Telegram Bot
+
+# Ejecuta el bot de Telegram en long-polling dentro de un runner de GitHub
+# Actions. Reinicia automáticamente según el cron.
+#
+# IMPORTANTE - limitaciones del plan gratuito de GitHub Actions:
+#   * Cada job dura máximo ~6h; GitHub lo cancela al superar ese límite.
+#   * 2.000 minutos/mes de cuota gratuita en cuentas personales.
+#   * GitHub puede pausar workflows que llevan >60 días sin commits en el repo.
+# Por eso el cron reinicia el bot periódicamente. Para un servicio realmente
+# 24/7 y estable, se recomienda un runner self-hosted o un servicio como
+# Railway/Render/Fly.io (todos con tier gratuito). Ver README.md.
+
+on:
+  schedule:
+    # Cada 15 minutos: lanza (o reinicia) el bot.
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    # Permite lanzarlo manualmente desde la pestaña Actions.
+
+# Evita ejecuciones concurrentes: si un job ya está corriendo, cancela el nuevo
+# (el viejo sigue vivo hasta sus ~6h). El bot usa getUpdates con offset, así que
+# reinicios no duplican mensajes.
+concurrency:
+  group: mintrack-bot
+  cancel-in-progress: false
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350  # algo menos de 6h para que GitHub no lo mate a la fuerza
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      LOG_LEVEL: INFO
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Check token is set
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
+            echo "::error::Falta el secret TELEGRAM_BOT_TOKEN. Configúralo en Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
+      - name: Run bot
+        run: |
+          python -m mintrack.bot

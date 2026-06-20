@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mintrack"
+version = "1.0.0"
+description = "Consulta títulos mineros vigentes de Colombia por código de expediente usando los geoservicios públicos de la ANM."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "MinTrack" }]
+dependencies = [
+    "requests>=2.31.0",
+    "python-telegram-bot>=21.0,<23.0",
+]
+
+[project.optional-dependencies]
+bot = ["python-telegram-bot>=21.0,<23.0"]
+
+[project.scripts]
+mintrack = "mintrack.cli:main"
+mintrack-bot = "mintrack.bot:main"
+
+[tool.setuptools.packages.find]
+include = ["mintrack*"]

@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: "pip"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+      - name: Syntax check
+        run: python -m py_compile mintrack/*.py
+      - name: Import check (bot module without running)
+        run: |
+          python -c "import mintrack.cli, mintrack.client, mintrack.models, mintrack.geo; print('core imports OK')"
+          python -c "import mintrack.bot; app=mintrack.bot.build_application('123:test'); assert len(app.handlers) >= 1; print('bot build OK')"
+      - name: CLI help smoke test
+        run: python -m mintrack.cli --help
