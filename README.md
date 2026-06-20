@@ -6,23 +6,19 @@ partir del **código del expediente**, usando los geoservicios públicos de la
 
 ## ¿Cómo funciona?
 
-MinTrack consulta el FeatureServer público de títulos mineros que publica la ANM
-sobre ArcGIS Enterprise:
+MinTrack consulta el FeatureServer público `Título_Vigente` que publica la ANM
+sobre ArcGIS Enterprise — **la misma capa que alimenta el visor ANNA Minería**:
 
 ```
-https://gisanm.anm.gov.co/server/rest/services/Hosted/Titulos_mineros/FeatureServer/0
+https://gisanm.anm.gov.co/server/rest/services/Hosted/Título_Vigente/FeatureServer/0
 ```
 
-La capa `titulos_vigentes` expone, por cada título, sus atributos (código del
-expediente, estado, modalidad, etapa, minerales, área en hectáreas, fechas,
-municipios, departamento, solicitante, grupo de trabajo, etc.) y su geometría
-(polígono en MAGNA-SIRGAS, SR 4686). El servicio soporta consultas SQL por el
-campo `codigo_exp` **sin necesidad de autenticación**.
-
-> **Nota sobre el alcance**: esta capa contiene los **títulos vigentes**. Los
-> expedientes en trámite, archivalizados o archivados podrían no aparecer aquí;
-> para esos casos es necesario recurrir al visor SIGM (`annamineria.anm.gov.co`),
-> que requiere inicio de sesión.
+Esta capa expone, por cada expediente, sus atributos completos (estado, fechas
+de solicitud/expedición/aniversario/expiración, modalidad, etapa, clasificación
+de minería, minerales, área, municipio, departamento, solicitantes, códigos de
+estado, centroide, etc.) y su geometría. El servicio soporta consultas SQL por
+`tenure_id`/`codigo_exp` **sin necesidad de autenticación**. (Existe una capa
+legacy `titulos_vigentes` con menos campos que se usa como fallback.)
 
 ## Instalación
 
@@ -91,14 +87,43 @@ print(titulos[0].to_dict())
 MinTrack incluye un bot de Telegram que permite consultar títulos mineros
 directamente desde el chat.
 
-### Comandos
+### Menú principal (inline keyboard)
+
+Al iniciar el bot (`/start`) aparece un menú con botones (accesible en cualquier
+momento con `/menu`):
 
 ```
-/start            Saludo y resumen de uso.
-/help             Ayuda detallada.
-/exp <código>     Consulta exacta por código de expediente. Ej: /exp TGU-14471
-/buscar <texto>   Búsqueda parcial por código. Ej: /buscar TGU
+📌 Servicios              → Aplicación Minera / Centinela (resumen + "ver más")
+💰 Precios                → Aplicación: $4.980.000/área
+                            Centinela: $2.790.000 inicial + $1.320.000 diario
+🚀 Iniciar solicitud       → Wizard de 4 pasos (empresa, contacto, teléfono, servicio)
+📄 Subir documentos        → Recibe PDF, imágenes y shapefiles; los guarda y confirma
+📊 Estado de proceso       → Estado de tu solicitud (avanza automáticamente)
+⛏️ Consultar título minero → Pide el código de expediente y muestra la ficha ANNA
 ```
+
+- **Servicios**: muestra un resumen breve de cada servicio con botón *ver más*
+  para el detalle.
+- **Precios**: precios en formato claro.
+- **Iniciar solicitud**: flujo paso a paso (ConversationHandler). Pide
+  empresa → contacto → teléfono → servicio (1=Aplicación Minera,
+  2=Centinela). Al terminar, crea la solicitud en estado *En revisión*.
+- **Subir documentos**: el usuario envía archivos (PDF/imagen/shape/zip) en el
+  chat; el bot los descarga a `data/docs/`, los registra en SQLite y confirma
+  la recepción. Subir el primer documento avanza el estado a *En proceso*.
+- **Estado de proceso**: muestra el estado de la solicitud activa. Los estados
+  avanzan automáticamente:
+  `En revisión → En proceso de aplicación → Centinela activo → Completado`.
+- **Consultar título minero**: pide el código (formato `AAA-#####`) y devuelve
+  los datos completos del expediente desde la ANM (igual que el CLI).
+
+### Persistencia
+
+Las solicitudes, documentos y estados se guardan en **SQLite** (`data/mintrack.db`).
+Los archivos subidos se guardan en `data/docs/`. Las rutas se configuran con las
+variables de entorno `MINTRACK_DB_PATH` y `MINTRACK_DOC_DIR` (por defecto,
+`./data/`). En el despliegue de GitHub Actions, la carpeta `data/` se conserva
+entre reinicios mediante la caché del workflow (ver limitaciones abajo).
 
 ### Crear el bot y obtener el token (con @BotFather)
 
@@ -123,7 +148,8 @@ export TELEGRAM_BOT_TOKEN=PEGA-TU-TOKEN-AQUÍ
 python -m mintrack.bot
 ```
 
-Luego abre tu bot en Telegram y envía `/start` y `/exp TGU-14471`.
+Luego abre tu bot en Telegram y envía `/start`. Aparecerá el menú con botones;
+pulsa *⛏️ Consultar título minero* y escribe un código (p. ej. `ICQ-09083`).
 
 ## Despliegue en GitHub (correr 24/7)
 
@@ -155,6 +181,11 @@ impone:
 - **2.000 minutos/mes** de cuota gratuita en cuentas personales.
 - GitHub **puede pausar** workflows en repositorios sin actividad (>60 días sin
   commits).
+- **Persistencia de datos**: el workflow usa `actions/cache` para conservar la
+  carpeta `data/` (SQLite + documentos subidos) entre reinicios. La caché tiene
+  un límite de 10 GB y expira si no se accede en ~7 días; si crece mucho o hay
+  inactividad, los datos pueden perderse. Para producción con muchos
+  documentos, usa un runner self-hosted o un servicio con volumen persistente.
 
 Esto significa que **habrá ventanas sin servicio** y que no es una solución
 estable de producción. Es útil para pruebas o para mantener el bot activo de

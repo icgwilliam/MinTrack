@@ -32,6 +32,9 @@ jobs:
     env:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       LOG_LEVEL: INFO
+      # Persistencia de la base de datos y documentos dentro del workspace.
+      MINTRACK_DB_PATH: ${{ github.workspace }}/data/mintrack.db
+      MINTRACK_DOC_DIR: ${{ github.workspace }}/data/docs
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -41,6 +44,16 @@ jobs:
         with:
           python-version: "3.13"
           cache: "pip"
+
+      - name: Restore data cache (DB + documentos)
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/data
+          # La key cambia con cada commit; para persistir entre reinicios del
+          # mismo commit usamos restore-keys (mantiene la última cache válida).
+          key: mintrack-data-${{ github.sha }}
+          restore-keys: |
+            mintrack-data-
 
       - name: Install dependencies
         run: |

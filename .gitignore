@@ -18,3 +18,6 @@ Thumbs.db
 # Entorno / secrets
 .env
 *.env
+
+# Datos del bot (SQLite + documentos subidos)
+data/

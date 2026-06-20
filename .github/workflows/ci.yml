@@ -20,9 +20,16 @@ jobs:
           pip install -e .
       - name: Syntax check
         run: python -m py_compile mintrack/*.py
-      - name: Import check (bot module without running)
+      - name: Import + build check (bot con menú, sin correr)
+        env:
+          MINTRACK_DB_PATH: /tmp/mintrack_ci.db
         run: |
-          python -c "import mintrack.cli, mintrack.client, mintrack.models, mintrack.geo; print('core imports OK')"
+          python -c "import mintrack.cli, mintrack.client, mintrack.models, mintrack.geo, mintrack.db, mintrack.menu; print('core imports OK')"
           python -c "import mintrack.bot; app=mintrack.bot.build_application('123:test'); assert len(app.handlers) >= 1; print('bot build OK')"
+      - name: DB smoke test
+        env:
+          MINTRACK_DB_PATH: /tmp/mintrack_db_ci.db
+        run: |
+          python -c "from mintrack.db import Database; db=Database(); s=db.crear_solicitud(1,'E','C','+57 300','aplicacion'); assert s.estado=='EN_REVISION'; db.registrar_documento(1,'f','d.pdf','pdf'); db.sincronizar_estado(1); assert db.obtener_solicitud(1).estado=='EN_PROCESO'; print('DB state machine OK')"
       - name: CLI help smoke test
         run: python -m mintrack.cli --help
