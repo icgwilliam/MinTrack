@@ -16,12 +16,13 @@ from __future__ import annotations
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
+from . import servicios as S
+
 # --- Callback data (prefijos para enrutamiento) ---------------------------
 
 CB_MENU = "menu"
 CB_SERVICIOS = "srv"
-CB_SERVICIOS_APLICACION = "srv_aplic"
-CB_SERVICIOS_CENTINELA = "srv_centi"
+CB_SERVICIO_PREFIX = "srv_"   # srv_<codigo> muestra el resumen del servicio
 CB_SERVICIOS_MAS = "srv_mas"
 CB_PRECIOS = "pre"
 CB_PRECIOS_MAS = "pre_mas"
@@ -36,46 +37,6 @@ CB_CANCELAR = "cancel"
 
 # Prefijos para cancelar una suscripción concreta desde "mis suscripciones".
 CB_DESUSCRIBIR_PREFIX = "cnt_del_"
-
-
-# --- Servicios y precios (datos de negocio) ------------------------------
-
-SERVICIOS_NOMBRES = {
-    "aplicacion": "Aplicación Minera",
-    "centinela": "Centinela (monitoreo)",
-}
-
-
-SERVICIOS = {
-    "aplicacion": {
-        "nombre": "Aplicación Minera",
-        "resumen": (
-            "Presentación y trámite de solicitudes mineras ante la ANM. "
-            "Gestión integral del expediente."
-        ),
-        "detalle": (
-            "• Radicación de solicitud de contrato de concesión.\n"
-            "• Levantamiento y validación de coordenadas del área.\n"
-            "• Elaboración del objeto técnico minero (OTM).\n"
-            "• Seguimiento del expediente hasta inscripción."
-        ),
-        "precio": "$4.980.000 por área",
-    },
-    "centinela": {
-        "nombre": "Centinela (monitoreo)",
-        "resumen": (
-            "Monitoreo permanente de tus títulos y áreas mineras: alertas, "
-            "vencimientos y novedades."
-        ),
-        "detalle": (
-            "• Monitoreo 24/7 del estado del título en ANNA.\n"
-            "• Alertas de vencimientos, aniversarios y novedades.\n"
-            "• Reportes periódicos del expediente.\n"
-            "• Detección de solapamientos o intrusiones."
-        ),
-        "precio": "$2.790.000 inicial + $1.320.000 diario",
-    },
-}
 
 
 # --- Keyboards ------------------------------------------------------------
@@ -100,10 +61,11 @@ def _con_volver(rows: list[list[InlineKeyboardButton]]) -> InlineKeyboardMarkup:
 
 
 def servicios_kb() -> InlineKeyboardMarkup:
+    """Un botón por servicio del catálogo BR-001 (se amplía solo al catálogo)."""
     return _con_volver(
         [
-            [InlineKeyboardButton("Aplicación Minera", callback_data=CB_SERVICIOS_APLICACION)],
-            [InlineKeyboardButton("Centinela (monitoreo)", callback_data=CB_SERVICIOS_CENTINELA)],
+            [InlineKeyboardButton(s.nombre, callback_data=f"{CB_SERVICIO_PREFIX}{s.codigo}")]
+            for s in S.SERVICIOS.values()
         ]
     )
 
@@ -171,32 +133,27 @@ TEXTO_MENU = (
 
 TEXTO_SERVICIOS = (
     "📌 *Servicios*\n\n"
-    "Elige un servicio para ver el resumen:"
+    "Cuatro servicios independientes que puedes contratar de manera individual "
+    "o en conjunto. Elige uno para ver el resumen:"
 )
 
-TEXTO_PRECIOS = (
-    "💰 *Precios*\n\n"
-    "• *Aplicación Minera:* $4.980.000 por área\n"
-    "• *Centinela (monitoreo):* $2.790.000 inicial + $1.320.000 diario\n"
-)
+TEXTO_PRECIOS = "💰 *Precios*\n\n" + "\n".join(
+    f"• *{s.nombre}:* {s.precio}" for s in S.SERVICIOS.values()
+) + "\n"
 
 
 def texto_servicio_resumen(key: str) -> str:
-    s = SERVICIOS[key]
-    return f"📌 *{s['nombre']}*\n\n{s['resumen']}\n\n💰 {s['precio']}"
+    s = S.SERVICIOS[key]
+    return f"📌 *{s.nombre}*\n\n{s.resumen}\n\n💰 {s.precio}"
 
 
 def texto_servicio_detalle(key: str) -> str:
-    s = SERVICIOS[key]
-    return f"📌 *{s['nombre']}* — detalle\n\n{s['detalle']}\n\n💰 {s['precio']}"
+    s = S.SERVICIOS[key]
+    return f"📌 *{s.nombre}* — detalle\n\n{s.detalle}\n\n💰 {s.precio}"
 
 
-TEXTO_PRECIOS_MAS = (
-    "💰 *Precios — qué incluye*\n\n"
-    "• *Aplicación Minera ($4.980.000 por área):* radicación, coordenadas, OTM "
-    "y seguimiento del expediente hasta inscripción.\n\n"
-    "• *Centinela ($2.790.000 inicial + $1.320.000 diario):* monitoreo 24/7, "
-    "alertas de vencimientos/novedades y reportes periódicos.\n"
+TEXTO_PRECIOS_MAS = "💰 *Precios — qué incluye*\n\n" + "\n\n".join(
+    f"• *{s.nombre} ({s.precio}):* {s.resumen}" for s in S.SERVICIOS.values()
 )
 
 TEXTO_CENTINELA = (
@@ -215,7 +172,12 @@ TEXTO_CENTINELA = (
 # Estados del wizard de "Iniciar solicitud" (ConversationHandler).
 W_EMPRESA, W_CONTACTO, W_TELEFONO, W_SERVICIO, W_CONFIRMACION = range(5)
 
-W_SERVICIO_TECLAS = {
-    "1": "aplicacion",
-    "2": "centinela",
-}
+
+def texto_wizard_servicios() -> str:
+    """Paso del wizard: selección individual o combinada de servicios."""
+    return (
+        "Paso 4/4 — Selecciona el *servicio o los servicios* a contratar:\n\n"
+        f"{S.texto_opciones()}\n\n"
+        "Responde con un número (ej. 2) o varios separados por coma "
+        "(ej. 1,3). El Paquete Integral se selecciona solo (4)."
+    )

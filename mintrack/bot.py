@@ -34,10 +34,10 @@ from telegram.ext import (
 
 from .client import ANMClient, ANMError
 from .db import Database, ESTADO_COMPLETADO
-from .menu import SERVICIOS_NOMBRES
 from .models import TituloMinero
 from . import centinela as C
 from . import menu as M
+from . import servicios as S
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -171,19 +171,16 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await _editar_menu(query, M.TEXTO_MENU, M.menu_principal_kb())
     elif data == M.CB_SERVICIOS:
         await _editar_menu(query, M.TEXTO_SERVICIOS, M.servicios_kb())
-    elif data == M.CB_SERVICIOS_APLICACION:
-        ctx.user_data["servicio_visto"] = "aplicacion"
-        await _editar_menu(
-            query, M.texto_servicio_resumen("aplicacion"), M.servicios_detalle_kb("aplicacion")
-        )
-    elif data == M.CB_SERVICIOS_CENTINELA:
-        ctx.user_data["servicio_visto"] = "centinela"
-        await _editar_menu(
-            query, M.texto_servicio_resumen("centinela"), M.servicios_detalle_kb("centinela")
-        )
     elif data == M.CB_SERVICIOS_MAS:
-        key = ctx.user_data.get("servicio_visto", "aplicacion")
+        key = ctx.user_data.get("servicio_visto") or next(iter(S.SERVICIOS))
         await _editar_menu(query, M.texto_servicio_detalle(key), M.servicios_detalle_kb(key))
+    elif data.startswith(M.CB_SERVICIO_PREFIX):
+        key = data[len(M.CB_SERVICIO_PREFIX):]
+        if key in S.SERVICIOS:
+            ctx.user_data["servicio_visto"] = key
+            await _editar_menu(
+                query, M.texto_servicio_resumen(key), M.servicios_detalle_kb(key)
+            )
     elif data == M.CB_PRECIOS:
         await _editar_menu(query, M.TEXTO_PRECIOS, M.precios_kb())
     elif data == M.CB_PRECIOS_MAS:
@@ -224,7 +221,7 @@ async def _mostrar_estado(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
     texto = (
         "📊 *Estado de proceso*\n\n"
         f"• Solicitud #: {sol.id}\n"
-        f"• Servicio: {SERVICIOS_NOMBRES.get(sol.servicio, sol.servicio)}\n"
+        f"• Servicio(s): {S.nombres_csv(sol.servicio)}\n"
         f"• Empresa: {sol.empresa}\n"
         f"• Contacto: {sol.contacto}\n"
         f"• Estado: *{sol.estado_label}*\n"
@@ -502,11 +499,7 @@ PROMPTS = {
     M.W_EMPRESA: "🚀 *Iniciar solicitud*\n\nPaso 1/4 — Escribe el *nombre de la empresa*:",
     M.W_CONTACTO: "Paso 2/4 — Escribe el *nombre del contacto*:",
     M.W_TELEFONO: "Paso 3/4 — Escribe el *número de teléfono*:",
-    M.W_SERVICIO: (
-        "Paso 4/4 — Selecciona el *tipo de servicio*:\n\n"
-        "1️⃣ Aplicación Minera\n2️⃣ Centinela (monitoreo)\n\n"
-        "Responde con 1 o 2."
-    ),
+    M.W_SERVICIO: M.texto_wizard_servicios(),
 }
 
 _TEL_RE = re.compile(r"^[+]?[\d\s().-]{6,}$")
@@ -566,11 +559,13 @@ async def wizard_telefono(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
 
 async def wizard_servicio(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     resp = (update.message.text or "").strip()
-    if resp not in M.W_SERVICIO_TECLAS:
-        await update.message.reply_text("Responde 1 o 2.")
+    try:
+        seleccion = S.parsear_seleccion(resp)
+    except ValueError as exc:
+        await update.message.reply_text(str(exc))
         return M.W_SERVICIO
-    servicio = M.W_SERVICIO_TECLAS[resp]
-    ctx.user_data["w_servicio"] = servicio
+    servicio_csv = ",".join(seleccion)
+    ctx.user_data["w_servicio"] = servicio_csv
 
     db = _get_db(ctx)
     user_id = update.effective_user.id
@@ -579,15 +574,15 @@ async def wizard_servicio(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
         empresa=ctx.user_data["w_empresa"],
         contacto=ctx.user_data["w_contacto"],
         telefono=ctx.user_data["w_telefono"],
-        servicio=servicio,
+        servicio=servicio_csv,
     )
-    nombre_serv = SERVICIOS_NOMBRES.get(servicio, servicio)
+    nombres = S.nombres(seleccion)
     await update.message.reply_text(
         "✅ *Solicitud creada*\n\n"
         f"• Empresa: {ctx.user_data['w_empresa']}\n"
         f"• Contacto: {ctx.user_data['w_contacto']}\n"
         f"• Teléfono: {ctx.user_data['w_telefono']}\n"
-        f"• Servicio: {nombre_serv}\n\n"
+        f"• Servicio(s): {nombres}\n\n"
         "Estado inicial: *En revisión*.\n\n"
         "Ahora puedes *📄 Subir documentos* para avanzar tu proceso.",
         parse_mode=ParseMode.MARKDOWN,
@@ -667,7 +662,7 @@ async def job_avanzar_solicitudes(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 chat_id=user_id,
                 text=(
                     f"📊 Actualización de tu solicitud #{sol_actualizada.id} "
-                    f"({SERVICIOS_NOMBRES.get(sol_actualizada.servicio, sol_actualizada.servicio)}):\n"
+                    f"({S.nombres_csv(sol_actualizada.servicio)}):\n"
                     f"Estado: *{sol_actualizada.estado_label}*.\n"
                     f"Vigente desde: {Database.fmt_fecha(sol_actualizada.estado_desde)}."
                 ),

@@ -91,21 +91,29 @@ Al iniciar el bot (`/start`) aparece un menú con botones (accesible en cualquie
 momento con `/menu`):
 
 ```
-📌 Servicios              → Aplicación Minera / Centinela (resumen + "ver más")
-💰 Precios                → Aplicación: $4.980.000/área
-                            Centinela: $2.790.000 inicial + $1.320.000 diario
-🚀 Iniciar solicitud       → Wizard de 4 pasos (empresa, contacto, teléfono, servicio)
+📌 Servicios              → Alistamiento documental / Monitoreo automatizado /
+                            Radicación automatizada / Paquete Integral MINTRACK
+💰 Precios                → Alistamiento: $1.000.000
+                            Monitoreo: $2.000.000 por área/año
+                            Radicación: $20.000.000
+                            Paquete Integral: $20.000.000 (tarifa preferencial)
+🚀 Iniciar solicitud       → Wizard de 4 pasos (empresa, contacto, teléfono, servicios)
 📄 Subir documentos        → Recibe PDF, imágenes y shapefiles; los guarda y confirma
 📊 Estado de proceso       → Estado de tu solicitud (avanza automáticamente)
 ⛏️ Consultar título minero → Pide el código de expediente y muestra la ficha ANNA
 ```
 
-- **Servicios**: muestra un resumen breve de cada servicio con botón *ver más*
-  para el detalle.
-- **Precios**: precios en formato claro.
+- **Servicios (BR-001)**: cuatro servicios independientes, contratables de
+  manera individual o en conjunto, y ampliables en el futuro. El catálogo vive
+  en `mintrack/servicios.py` y los menús/precios/wizard se generan desde él.
+  El *Paquete Integral MINTRACK* (BR-002) incluye los otros tres con tarifa
+  preferencial y se selecciona solo.
+- **Precios**: se generan dinámicamente desde el catálogo de servicios.
 - **Iniciar solicitud**: flujo paso a paso (ConversationHandler). Pide
-  empresa → contacto → teléfono → servicio (1=Aplicación Minera,
-  2=Centinela). Al terminar, crea la solicitud en estado *En revisión*.
+  empresa → contacto → teléfono → servicios. En el último paso se puede
+  elegir un servicio (`2`) o varios combinados (`1,3`); el Paquete Integral
+  se elige con `4`. Al terminar, crea la solicitud en estado *En revisión*
+  con todos los servicios seleccionados.
 - **Subir documentos**: el usuario envía archivos (PDF/imagen/shape/zip) en el
   chat; el bot los descarga a `data/docs/`, los registra en SQLite y confirma
   la recepción. Subir el primer documento avanza el estado a *En proceso*.
@@ -207,6 +215,7 @@ vivo el proceso.
 ```
 mintrack/
 ├── __init__.py
+├── servicios.py  # Catálogo de servicios BR-001 (fuente única de verdad)
 ├── client.py     # Adaptador del script de consulta pública AnnA/SAR
 ├── models.py     # Modelo TituloMinero
 ├── geo.py        # Conversión ArcGIS -> GeoJSON

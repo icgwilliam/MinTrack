@@ -131,7 +131,7 @@ class Solicitud:
     empresa: str
     contacto: str
     telefono: str
-    servicio: str
+    servicio: str          # CSV de códigos del catálogo BR-001 (ej. "monitoreo,radicacion")
     estado: str
     created_at: float
     estado_desde: float
@@ -139,6 +139,11 @@ class Solicitud:
     @property
     def estado_label(self) -> str:
         return ESTADO_LABELS.get(self.estado, self.estado)
+
+    @property
+    def servicios(self) -> list[str]:
+        """Códigos de servicio contratados (uno o varios, según BR-001)."""
+        return [s.strip() for s in self.servicio.split(",") if s.strip()]
 
 
 @dataclass
