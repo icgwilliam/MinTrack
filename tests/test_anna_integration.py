@@ -6,12 +6,32 @@ import sqlite3
 from pathlib import Path
 
 from mintrack import centinela
+from mintrack.bot import MAX_FIELD_LEN, _formatar_titulo
 from mintrack.client import ANMClient
 from mintrack.db import Database, Snapshot
 from mintrack.models import TituloMinero
 
 
 class AnnaIntegrationTests(unittest.TestCase):
+    def test_bot_prioritizes_sar_and_limits_long_fields(self) -> None:
+        title = TituloMinero(
+            codigo_exp="ARE-509209",
+            minerales="X" * (MAX_FIELD_LEN + 100),
+            extras={
+                "release_analysis": {
+                    "state": "LIBERACION_PROGRAMADA",
+                    "message": "Existe fecha oficial.",
+                    "releaseAtColombia": "2026-07-21T07:30:00-05:00",
+                }
+            },
+        )
+
+        text = _formatar_titulo(title)
+
+        self.assertLess(text.index("Liberación de área"), text.index("Minerales:"))
+        self.assertIn("2026-07-21T07:30:00-05:00", text)
+        self.assertIn("... (resumido)", text)
+
     def test_report_is_adapted_to_existing_model(self) -> None:
         report = {
             "releaseAnalysis": {

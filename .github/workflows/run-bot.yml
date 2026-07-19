@@ -17,18 +17,26 @@ name: Run MinTrack Telegram Bot
 # se recomienda un runner self-hosted o un PaaS/VPS. Ver README.md.
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "mintrack/**"
+      - "existing_scripts/**"
+      - "requirements.txt"
+      - "pyproject.toml"
+      - ".github/workflows/run-bot.yml"
   schedule:
-    # Cada 15 minutos: lanza (o reinicia) el bot.
-    - cron: "*/15 * * * *"
+    # Cada 5 horas: reemplaza la instancia antes del límite de 6 horas.
+    - cron: "0 */5 * * *"
   workflow_dispatch:
     # Permite lanzarlo manualmente desde la pestaña Actions.
 
-# Evita ejecuciones concurrentes: si un job ya está corriendo, cancela el nuevo
-# (el viejo sigue vivo hasta sus ~6h). El bot usa getUpdates con offset, así que
-# reinicios no duplican mensajes.
+# Evita ejecuciones concurrentes y reemplaza la instancia anterior cuando un
+# push o lanzamiento manual despliega código nuevo. El bot usa getUpdates con
+# offset, así que los reinicios no duplican mensajes.
 concurrency:
   group: mintrack-bot
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   run-bot:

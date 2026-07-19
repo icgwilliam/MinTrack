@@ -46,6 +46,7 @@ logging.basicConfig(
 logger = logging.getLogger("mintrack.bot")
 
 MAX_MSG_LEN = 4000
+MAX_FIELD_LEN = 700
 
 # --- Campos del título minero (igual que antes) ---------------------------
 
@@ -90,6 +91,13 @@ def _formatar_titulo(t: TituloMinero) -> str:
     data = t.to_dict()
     head = t.codigo_exp or t.tenure_id or "(sin código)"
     lines = [f"=== {head} ==="]
+    analysis = t.extras.get("release_analysis") or {}
+    if analysis:
+        lines.append("\n=== Liberación de área (SAR) ===")
+        lines.append(f"• Estado: {analysis.get('state', 'Sin dato')}")
+        lines.append(f"• Interpretación: {analysis.get('message', 'Sin dato')}")
+        if analysis.get("releaseAtColombia"):
+            lines.append(f"• Fecha oficial: {analysis['releaseAtColombia']}")
     for key, label in TITULO_LABELS:
         value = data.get(key)
         if value is None or value == "":
@@ -98,16 +106,12 @@ def _formatar_titulo(t: TituloMinero) -> str:
             value = _fmt_fecha(value)
             if not value:
                 continue
+        value = str(value)
+        if len(value) > MAX_FIELD_LEN:
+            value = value[: MAX_FIELD_LEN - 14] + "... (resumido)"
         lines.append(f"• {label}: {value}")
     if t.geometry:
         lines.append("• Geometría: incluida (polígono)")
-    analysis = t.extras.get("release_analysis") or {}
-    if analysis:
-        lines.append("\n=== Liberación de área (SAR) ===")
-        lines.append(f"• Estado: {analysis.get('state', 'Sin dato')}")
-        lines.append(f"• Interpretación: {analysis.get('message', 'Sin dato')}")
-        if analysis.get("releaseAtColombia"):
-            lines.append(f"• Fecha oficial: {analysis['releaseAtColombia']}")
     return "\n".join(lines)
 
 
