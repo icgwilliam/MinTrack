@@ -1,17 +1,17 @@
 """Lógica del 'centinela': detección de cambios en títulos mineros de la ANM.
 
-Compara el estado actual de un expediente (desde ``Título_Vigente``) contra el
+Compara el estado actual de un expediente (desde AnnA Minería) contra el
 último snapshot guardado en SQLite y produce una lista de eventos notificables:
 
-* ``liberacion_area``: el área (ha) disminuyó -> se liberó parte del título.
+* ``liberacion_publicada``: SAR publicó o cambió una fecha de liberación.
 * ``cambio_estado``: cambió ``titulo_est`` (ej. Activo -> En proceso de
   liquidación).
 * ``cambio_etapa``: cambió ``etapa`` (ej. Exploración -> Explotación).
 * ``vencimiento_proximo``: la fecha de expiración está a <= N días.
 
-No existe un endpoint dedicado de "liberaciones de área" en la ANM (es un
-concepto a nivel de aplicación dentro de ANNA Minería). Aquí reconstruimos las
-liberaciones detectando reducciones del campo ``area_ha`` entre revisiones.
+La señal principal de liberación viene del endpoint público SAR consultado por
+``existing_scripts/monitoreotitulo.py``. La reducción de área se conserva como
+señal complementaria cuando ese dato esté disponible.
 """
 
 from __future__ import annotations
@@ -58,6 +58,10 @@ def comparar(titulo: TituloMinero, snapshot: Optional[Snapshot]) -> list[EventoC
     """
     codigo = titulo.codigo_exp or titulo.tenure_id or ""
     eventos: list[EventoCentinela] = []
+    analysis = titulo.extras.get("release_analysis") or {}
+    signals = analysis.get("signals") or {}
+    release_state = analysis.get("state")
+    release_date = signals.get("releaseDate")
 
     if snapshot is None:
         # Primera observación: solo aviso de vencimiento próximo si aplica.
@@ -65,6 +69,32 @@ def comparar(titulo: TituloMinero, snapshot: Optional[Snapshot]) -> list[EventoC
         if prox:
             eventos.append(prox)
         return eventos
+
+    publication_states = {
+        "PUBLICACION_SIN_FECHA_LIBERACION",
+        "ACTO_EN_FIRME_SIN_FECHA_LIBERACION",
+        "LIBERACION_PROGRAMADA",
+        "LIBERACION_EFECTIVA",
+    }
+    if release_state in publication_states and (
+        release_date != snapshot.release_date or release_state != snapshot.release_state
+    ):
+        release_at = analysis.get("releaseAtColombia") or "fecha no disponible"
+        eventos.append(
+            EventoCentinela(
+                tipo="liberacion_publicada",
+                codigo_exp=codigo,
+                mensaje=(
+                    f"Actualización oficial SAR para {codigo}: {release_at}. "
+                    f"Estado SAR: {release_state}."
+                ),
+                detalles={
+                    "estado_sar": release_state,
+                    "fecha_liberacion": release_at,
+                    "release_date": release_date,
+                },
+            )
+        )
 
     # Liberación de área: reducción significativa.
     if (
@@ -177,6 +207,8 @@ def _vencimiento_proximo(titulo: TituloMinero) -> Optional[EventoCentinela]:
 
 def actualizar_snapshot(db: Database, titulo: TituloMinero) -> Snapshot:
     """Crea/actualiza el snapshot a partir de un título."""
+    analysis = titulo.extras.get("release_analysis") or {}
+    signals = analysis.get("signals") or {}
     snap = Snapshot(
         codigo_exp=titulo.codigo_exp or titulo.tenure_id or "",
         area_ha=titulo.area_ha,
@@ -186,6 +218,8 @@ def actualizar_snapshot(db: Database, titulo: TituloMinero) -> Snapshot:
         fecha_de_e=_fecha_epoch_ms(titulo.fecha_de_e),
         fecha_de01=_fecha_epoch_ms(titulo.fecha_de01),
         visto_en=datetime.now(timezone.utc).timestamp(),
+        release_state=analysis.get("state"),
+        release_date=signals.get("releaseDate"),
     )
     db.guardar_snapshot(snap)
     return snap

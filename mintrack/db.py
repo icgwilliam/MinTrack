@@ -115,6 +115,8 @@ CREATE TABLE IF NOT EXISTS snapshots (
     modalidad TEXT,
     fecha_de_e REAL,            -- fecha de expedición (epoch)
     fecha_de01 REAL,            -- fecha de expiración (epoch)
+    release_state TEXT,         -- estado calculado desde la publicación SAR
+    release_date REAL,          -- fecha oficial de liberación SAR (epoch ms)
     visto_en REAL NOT NULL      -- timestamp de la última revisión
 );
 
@@ -158,6 +160,8 @@ class Snapshot:
     fecha_de_e: Optional[float]
     fecha_de01: Optional[float]
     visto_en: float
+    release_state: Optional[str] = None
+    release_date: Optional[float] = None
 
 
 class Database:
@@ -170,7 +174,17 @@ class Database:
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)
+        self._migrate_snapshots()
         self._conn.commit()
+
+    def _migrate_snapshots(self) -> None:
+        """Añade señales SAR a bases creadas por versiones anteriores."""
+        columns = {
+            row[1] for row in self._conn.execute("PRAGMA table_info(snapshots)").fetchall()
+        }
+        for name, kind in (("release_state", "TEXT"), ("release_date", "REAL")):
+            if name not in columns:
+                self._conn.execute(f"ALTER TABLE snapshots ADD COLUMN {name} {kind}")
 
     @contextmanager
     def _cursor(self) -> Iterator[sqlite3.Cursor]:
@@ -413,16 +427,19 @@ class Database:
             cur.execute(
                 """INSERT INTO snapshots
                    (codigo_exp, area_ha, titulo_est, etapa, modalidad,
-                    fecha_de_e, fecha_de01, visto_en)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    fecha_de_e, fecha_de01, visto_en, release_state, release_date)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(codigo_exp) DO UPDATE SET
                      area_ha=excluded.area_ha, titulo_est=excluded.titulo_est,
-                     etapa=excluded.etapa, modalidad=excluded.modalidad,
-                     fecha_de_e=excluded.fecha_de_e, fecha_de01=excluded.fecha_de01,
-                     visto_en=excluded.visto_en""",
+                      etapa=excluded.etapa, modalidad=excluded.modalidad,
+                      fecha_de_e=excluded.fecha_de_e, fecha_de01=excluded.fecha_de01,
+                      release_state=excluded.release_state,
+                      release_date=excluded.release_date,
+                      visto_en=excluded.visto_en""",
                 (
                     snap.codigo_exp, snap.area_ha, snap.titulo_est, snap.etapa,
                     snap.modalidad, snap.fecha_de_e, snap.fecha_de01, snap.visto_en,
+                    snap.release_state, snap.release_date,
                 ),
             )
 

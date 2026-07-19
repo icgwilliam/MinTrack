@@ -1,24 +1,22 @@
 # MinTrack
 
-Sistema para consultar los datos de un **título minero vigente en Colombia** a
-partir del **código del expediente**, usando los geoservicios públicos de la
+Sistema para consultar los datos de un **título minero en Colombia** a
+partir del **código del expediente**, usando los servicios públicos de la
 **Agencia Nacional de Minería (ANM)**.
 
 ## ¿Cómo funciona?
 
-MinTrack consulta el FeatureServer público `Título_Vigente` que publica la ANM
-sobre ArcGIS Enterprise — **la misma capa que alimenta el visor ANNA Minería**:
+MinTrack reutiliza `existing_scripts/monitoreotitulo.py` para consultar los
+endpoints públicos que alimentan las búsquedas de **AnnA Minería**:
 
 ```
-https://gisanm.anm.gov.co/server/rest/services/Hosted/Título_Vigente/FeatureServer/0
+https://annamineria.anm.gov.co/sigm/staSearchTitleApplications?lang=es
+https://annamineria.anm.gov.co/sigm/sarSearchAreaReleases?lang=es
 ```
 
-Esta capa expone, por cada expediente, sus atributos completos (estado, fechas
-de solicitud/expedición/aniversario/expiración, modalidad, etapa, clasificación
-de minería, minerales, área, municipio, departamento, solicitantes, códigos de
-estado, centroide, etc.) y su geometría. El servicio soporta consultas SQL por
-`tenure_id`/`codigo_exp` **sin necesidad de autenticación**. (Existe una capa
-legacy `titulos_vigentes` con menos campos que se usa como fallback.)
+La búsqueda obtiene los datos del expediente y consulta también el registro SAR
+de liberaciones de área. Una liberación solo se presenta como oficial cuando
+AnnA publica la señal correspondiente; MinTrack no predice fechas ausentes.
 
 ## Instalación
 
@@ -46,21 +44,21 @@ Minerales: ARENAS
 Municipios: SAN ESTANISLAO
 Departamento: BOLÍVAR
 Grupo de trabajo: PAR CARTAGENA
-Área (ha): 54.50316621
-Geometría: incluida (polígono en MAGNA-SIRGAS, SR 4686)
+Clasificación de minería: Pequeña
+Solicitantes / Titulares: EJEMPLO DE TITULAR
 ```
 
 ### Formatos de salida
 
 ```bash
 mintrack consultar TGU-14471 --format json      # JSON con todos los atributos
-mintrack consultar TGU-14471 --format geojson   # GeoJSON Feature (con polígono)
-mintrack consultar TGU-14471 --no-geometry      # sin descargar la geometría
+mintrack consultar TGU-14471 --format geojson   # GeoJSON de atributos, sin polígono
+mintrack consultar TGU-14471 --no-geometry      # opción compatible; AnnA no entrega geometría aquí
 ```
 
-### Búsqueda parcial por código
+### Búsqueda por código
 
-Útil cuando no se recuerda el código exacto:
+AnnA puede devolver el expediente exacto y variantes históricas relacionadas:
 
 ```bash
 mintrack buscar TGU --limit 20
@@ -115,7 +113,8 @@ momento con `/menu`):
   avanzan automáticamente:
   `En revisión → En proceso de aplicación → Centinela activo → Completado`.
 - **Consultar título minero**: pide el código (formato `AAA-#####`) y devuelve
-  los datos completos del expediente desde la ANM (igual que el CLI).
+  los datos del expediente y el análisis de liberación SAR generado por
+  `existing_scripts/monitoreotitulo.py`.
 
 ### Persistencia
 
@@ -208,11 +207,13 @@ vivo el proceso.
 ```
 mintrack/
 ├── __init__.py
-├── client.py     # Cliente REST de la ANM (FeatureServer)
+├── client.py     # Adaptador del script de consulta pública AnnA/SAR
 ├── models.py     # Modelo TituloMinero
 ├── geo.py        # Conversión ArcGIS -> GeoJSON
 ├── cli.py        # CLI (mintrack consultar / buscar)
 └── bot.py        # Bot de Telegram (mintrack-bot / python -m mintrack.bot)
+existing_scripts/
+└── monitoreotitulo.py # Consulta títulos y liberaciones en AnnA Minería
 .github/workflows/
 ├── ci.yml        # CI: sintaxis + imports + CLI help
 └── run-bot.yml   # Despliegue del bot en Actions (cron cada 15 min)

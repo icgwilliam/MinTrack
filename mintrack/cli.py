@@ -125,8 +125,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="mintrack",
         description=(
             "Consulta títulos mineros de Colombia a partir del código de "
-            "expediente, usando los geoservicios públicos de la ANM (fuente ANNA "
-            "Minería)."
+            "expediente, usando las búsquedas públicas de AnnA Minería."
         ),
     )
     sub = parser.add_subparsers(dest="command", required=True)
@@ -151,7 +150,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_buscar = sub.add_parser(
         "buscar",
-        help="Búsqueda parcial por código de expediente (LIKE).",
+        help="Busca un código y sus variantes históricas en AnnA.",
     )
     p_buscar.add_argument("texto", help="Texto a buscar dentro del código de expediente.")
     p_buscar.add_argument(

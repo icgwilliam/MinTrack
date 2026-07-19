@@ -1,11 +1,4 @@
-"""Modelos de datos para títulos mineros de la ANM (Colombia).
-
-La fuente principal es el FeatureServer ``Título_Vigente`` publicado por la ANM
-(``gisanm.anm.gov.co``), que es la misma que alimenta el visor ANNA Minería y
-contiene los campos completos del expediente (estado, fechas de
-solicitud/expedición/aniversario/expiración, clasificación de minería,
-solicitantes con identificación, códigos de estado, centroide, etc.).
-"""
+"""Modelos de datos para títulos mineros de la ANM (Colombia)."""
 
 from __future__ import annotations
 
@@ -18,10 +11,9 @@ from typing import Any
 class TituloMinero:
     """Representación completa de un título/expediente minero en Colombia.
 
-    Los nombres de campo (``tenure_id``, ``titulo_est``, ``fecha_de_s``...) son
-    los del FeatureServer ``Título_Vigente`` (nombres truncados a 10 chars por
-    provenir de un shapefile). Las propiedades con prefijo ``fecha_*`` se
-    convierten a :class:`~datetime.datetime`.
+    Conserva los nombres usados originalmente por MinTrack para mantener estable
+    la interfaz del bot, la CLI y los snapshots. Las propiedades con prefijo
+    ``fecha_*`` se convierten a :class:`~datetime.datetime`.
     """
 
     # Identificación
@@ -138,6 +130,68 @@ class TituloMinero:
             geometry=feature.get("geometry"),
             shape_area=attrs.get("SHAPE__Area"),
             shape_length=attrs.get("SHAPE__Length"),
+        )
+
+    @classmethod
+    def from_anna(
+        cls,
+        item: dict[str, Any],
+        *,
+        release_analysis: dict[str, Any] | None = None,
+    ) -> "TituloMinero":
+        """Construye un título desde la búsqueda pública de AnnA Minería."""
+
+        def _description(value: Any) -> str | None:
+            if isinstance(value, dict):
+                return value.get("description") or value.get("code")
+            return str(value) if value not in (None, "") else None
+
+        def _code(value: Any) -> str | None:
+            return str(value.get("code")) if isinstance(value, dict) and value.get("code") else None
+
+        def _date(value: Any) -> datetime | None:
+            if value in (None, ""):
+                return None
+            try:
+                number = float(value)
+                if abs(number) > 10_000_000_000:
+                    number /= 1000
+                return datetime.fromtimestamp(number, tz=timezone.utc)
+            except (TypeError, ValueError, OSError, OverflowError):
+                return None
+
+        tenure_id = str(item.get("tenureId") or item.get("rmnCode") or "")
+        status = item.get("tenureStatus")
+        stage = item.get("tenureStage")
+        tenure_type = item.get("tenureType")
+        classification = item.get("miningClassfication")
+        extras = {
+            "no_of_cells": item.get("noOfCells"),
+            "approved_environmental_licence": item.get("approvedEnvironmentalLicence"),
+            "release_analysis": release_analysis or {},
+        }
+        return cls(
+            codigo_exp=tenure_id,
+            tenure_id=tenure_id,
+            titulo_est=_description(status),
+            tenure_sta=_code(status),
+            tenure_s01=_code(stage),
+            title_type=_code(tenure_type),
+            mining_cla=_code(classification),
+            clasificac=_description(classification),
+            etapa=_description(stage),
+            modalidad=_description(tenure_type),
+            publicado_=item.get("publishedRucom"),
+            active_ten="Y" if _code(status) == "A" else None,
+            departamen=item.get("departmentCsv"),
+            municipios=item.get("municipalityCsv"),
+            solicitant=item.get("clientOwnerInfoVOs") or item.get("titleHoldersCsv"),
+            minerales=_description(item.get("mineral")),
+            par=_description(item.get("regionalOffice")),
+            fecha_de_s=_date(item.get("submissionDate")),
+            fecha_de_e=_date(item.get("registrationDate")),
+            fecha_de01=_date(item.get("expiryDate")),
+            extras=extras,
         )
 
     def to_dict(self) -> dict[str, Any]:

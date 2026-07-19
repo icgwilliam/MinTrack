@@ -23,4 +23,4 @@ mintrack = "mintrack.cli:main"
 mintrack-bot = "mintrack.bot:main"
 
 [tool.setuptools.packages.find]
-include = ["mintrack*"]
+include = ["mintrack*", "existing_scripts*"]

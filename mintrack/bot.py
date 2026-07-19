@@ -3,7 +3,7 @@
 Menú principal: Servicios, Precios, Iniciar solicitud, Subir documentos,
 Estado de proceso y Consultar título minero.
 
-- La consulta de títulos mineros usa el ``ANMClient`` (FeatureServer ANNA).
+- La consulta usa ``existing_scripts/monitoreotitulo.py`` contra AnnA y SAR.
 - Las solicitudes, documentos y estados se persisten en SQLite (``mintrack.db``).
 - "Iniciar solicitud" es un wizard paso a paso (ConversationHandler).
 - El estado de proceso avanza automáticamente (reglas de tiempo + subida de docs).
@@ -101,6 +101,13 @@ def _formatar_titulo(t: TituloMinero) -> str:
         lines.append(f"• {label}: {value}")
     if t.geometry:
         lines.append("• Geometría: incluida (polígono)")
+    analysis = t.extras.get("release_analysis") or {}
+    if analysis:
+        lines.append("\n=== Liberación de área (SAR) ===")
+        lines.append(f"• Estado: {analysis.get('state', 'Sin dato')}")
+        lines.append(f"• Interpretación: {analysis.get('message', 'Sin dato')}")
+        if analysis.get("releaseAtColombia"):
+            lines.append(f"• Fecha oficial: {analysis['releaseAtColombia']}")
     return "\n".join(lines)
 
 
@@ -252,7 +259,7 @@ async def on_texto(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     """
     if ctx.user_data.get(FLAG_CONSULTA):
         ctx.user_data[FLAG_CONSULTA] = False
-        codigo = (update.message.text or "").strip()
+        codigo = (update.message.text or "").strip().upper()
         if not codigo:
             await update.message.reply_text(
                 "Código vacío. Inténtalo de nuevo o usa /menu.",
@@ -264,7 +271,7 @@ async def on_texto(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
     if ctx.user_data.get(FLAG_SUSCRIPCION):
         ctx.user_data[FLAG_SUSCRIPCION] = False
-        codigo = (update.message.text or "").strip()
+        codigo = (update.message.text or "").strip().upper()
         if not codigo:
             await update.message.reply_text(
                 "Código vacío. Inténtalo de nuevo o usa /menu.",
@@ -315,7 +322,7 @@ async def _suscribir(update: Update, ctx: ContextTypes.DEFAULT_TYPE, codigo: str
     if creado:
         msg = (
             f"✅ Te suscribiste a *{codigo}*.\n\nNotificaré automáticamente "
-            "cambios de área (liberaciones), estado, etapa y vencimientos próximos."
+            "publicaciones SAR, estado, etapa y vencimientos próximos."
         )
     else:
         msg = f"ℹ️ Ya estabas suscrito a *{codigo}*. Suscripción reactivada."
