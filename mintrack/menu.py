@@ -56,14 +56,18 @@ CB_ADMIN_DOCS_PREFIX = "ad_"           # ad_<id> reenviar documentos al admin
 
 # --- Keyboards ------------------------------------------------------------
 
-def menu_principal_kb() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton("📌 Servicios", callback_data=CB_SERVICIOS)],
-            [InlineKeyboardButton("📊 Mis procesos", callback_data=CB_ESTADO)],
-            [InlineKeyboardButton("⛏️ Consultar título minero", callback_data=CB_CONSULTAR)],
-        ]
-    )
+def menu_principal_kb(es_admin: bool = False) -> InlineKeyboardMarkup:
+    """Menú principal. 'Consultar título minero' es solo para el admin: para
+    un cliente compite con el servicio de Monitoreo automatizado."""
+    filas = [
+        [InlineKeyboardButton("📌 Servicios", callback_data=CB_SERVICIOS)],
+        [InlineKeyboardButton("📊 Mis procesos", callback_data=CB_ESTADO)],
+    ]
+    if es_admin:
+        filas.append(
+            [InlineKeyboardButton("⛏️ Consultar título minero", callback_data=CB_CONSULTAR)]
+        )
+    return InlineKeyboardMarkup(filas)
 
 
 def _con_volver(rows: list[list[InlineKeyboardButton]]) -> InlineKeyboardMarkup:

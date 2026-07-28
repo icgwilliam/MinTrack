@@ -98,6 +98,18 @@ class MenuServiciosTests(unittest.TestCase):
             ficha = M.texto_servicio(codigo)
             self.assertNotIn("BR-", ficha)
 
+    def test_alistamiento_lista_documentos_requeridos(self) -> None:
+        ficha = M.texto_servicio(S.ALISTAMIENTO)
+        for esperado in (
+            "Certificación ambiental",
+            "Archivo geográfico",
+            "Certificado de existencia y representación legal",
+            "RUT",
+            "Estados financieros y declaración de renta",
+            "dos o más proponentes",
+        ):
+            self.assertIn(esperado, ficha)
+
     def test_teclado_servicio_tiene_ver_precio_e_iniciar(self) -> None:
         kb = M.servicio_kb(S.MONITOREO)
         callbacks = [b.callback_data for row in kb.inline_keyboard for b in row]
@@ -105,13 +117,19 @@ class MenuServiciosTests(unittest.TestCase):
         self.assertIn(f"{M.CB_INICIAR_PREFIX}{S.MONITOREO}", callbacks)
         self.assertIn(M.CB_VOLVER, callbacks)
 
-    def test_menu_principal_solo_tres_botones(self) -> None:
+    def test_menu_principal_cliente_sin_consultar_titulo(self) -> None:
+        """'Consultar título minero' compite con Monitoreo: solo para el admin."""
         kb = M.menu_principal_kb()
         callbacks = [b.callback_data for row in kb.inline_keyboard for b in row]
-        self.assertEqual(callbacks, [M.CB_SERVICIOS, M.CB_ESTADO, M.CB_CONSULTAR])
+        self.assertEqual(callbacks, [M.CB_SERVICIOS, M.CB_ESTADO])
+        self.assertNotIn(M.CB_CONSULTAR, callbacks)
         self.assertNotIn("ini", callbacks)
         self.assertNotIn("sub", callbacks)
-        self.assertNotIn("cnt", callbacks)
+
+    def test_menu_principal_admin_incluye_consultar_titulo(self) -> None:
+        kb = M.menu_principal_kb(es_admin=True)
+        callbacks = [b.callback_data for row in kb.inline_keyboard for b in row]
+        self.assertEqual(callbacks, [M.CB_SERVICIOS, M.CB_ESTADO, M.CB_CONSULTAR])
 
     def test_procesos_kb_un_boton_por_proceso(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -94,7 +94,6 @@ momento con `/menu`):
 📌 Servicios              → Alistamiento documental / Monitoreo automatizado /
                             Radicación automatizada / Paquete Integral MINTRACK
 📊 Mis procesos           → Lista tus procesos (uno por servicio contratado)
-⛏️ Consultar título minero → Pide el código de expediente y muestra la ficha ANNA
 ```
 
 *Iniciar solicitud*, *Subir documentos* y *Subir soporte de pago* ya no son
@@ -102,13 +101,21 @@ botones del menú principal: se llega a ellos desde la ficha de un servicio o
 desde el detalle de un proceso concreto en *Mis procesos*, porque un mismo
 usuario puede tener varios procesos activos a la vez.
 
+*⛏️ Consultar título minero* ya no aparece para los clientes: compite
+directamente con el servicio de pago *Monitoreo automatizado* (¿para qué
+pagar por vigilancia si puedes consultar gratis?). Solo se muestra en el
+menú de quien esté autenticado como administrador (`/admin`).
+
 - **Servicios (BR-001)**: cuatro servicios independientes, contratables de
   manera individual, y ampliables en el futuro. El catálogo vive en
   `mintrack/servicios.py` y los menús/precios/wizard se generan desde él. Al
   elegir un servicio se muestra su ficha completa (sin precio) con un botón
   *Ver precio*; la tarifa de cada servicio se consulta ahí, no en un menú
   separado. El *Paquete Integral MINTRACK* (BR-002) incluye los otros tres con
-  tarifa preferencial.
+  tarifa preferencial. La ficha de *Alistamiento documental* incluye el
+  listado completo de documentos requeridos para radicar una propuesta de
+  contrato de concesión (certificación ambiental, archivo geográfico, RUT,
+  estados financieros, etc.).
 - **Iniciar solicitud**: wizard de 3 pasos (ConversationHandler) al que se
   entra siempre desde la ficha de un servicio, con ese servicio ya
   preseleccionado: nombre de la empresa o persona natural → número de

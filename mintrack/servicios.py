@@ -54,13 +54,29 @@ SERVICIOS: dict[str, Servicio] = {
             "• Revisar formatos.\n"
             "• Organizar la documentación.\n\n"
             "No incluye conceptos jurídicos, financieros o técnicos, ni "
-            "evaluación de viabilidad minera."
+            "evaluación de viabilidad minera.\n\n"
+            "📋 *Documentos requeridos para radicar la propuesta de contrato "
+            "de concesión:*\n"
+            "• Certificación ambiental expedida por la autoridad ambiental "
+            "respectiva.\n"
+            "• Archivo geográfico presentado ante la autoridad ambiental.\n"
+            "• Certificado de existencia y representación legal.\n"
+            "• Fotocopia del documento de identificación.\n"
+            "• Fotocopia de la tarjeta profesional del contador.\n"
+            "• Certificado de ingresos expedido por contador público.\n"
+            "• Extractos bancarios del proponente.\n"
+            "• RUT (Registro Único Tributario) actualizado.\n"
+            "• Estados financieros y declaración de renta de los dos "
+            "últimos años.\n\n"
+            "Si la solicitud la presentan dos o más proponentes, cada uno "
+            "debe aportar esta misma documentación."
         ),
         precio="$1.000.000",
         siguiente_paso=(
-            "Carga los documentos que quieres que revisemos. "
-            "Nos encargaremos de verificar existencia, vigencia, firmas y "
-            "formatos, y de organizarlos."
+            "Carga los documentos que quieres que revisemos (ver el listado "
+            "completo en la ficha del servicio). Nos encargaremos de "
+            "verificar existencia, vigencia, firmas y formatos, y de "
+            "organizarlos."
         ),
     ),
     MONITOREO: Servicio(

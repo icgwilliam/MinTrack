@@ -143,6 +143,11 @@ async def _editar_menu(query, ctx: ContextTypes.DEFAULT_TYPE, texto: str, kb: In
         await query.message.reply_text(texto, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
 
 
+def _menu_kb(ctx: ContextTypes.DEFAULT_TYPE) -> InlineKeyboardMarkup:
+    """Menú principal, mostrando 'Consultar título minero' solo al admin."""
+    return M.menu_principal_kb(es_admin=bool(ctx.user_data.get("is_admin")))
+
+
 def _get_db(ctx: ContextTypes.DEFAULT_TYPE) -> Database:
     if ctx.user_data.get("sandbox"):
         return ctx.application.bot_data["db_sandbox"]
@@ -165,14 +170,14 @@ def _parse_id(data: str, prefix: str) -> Optional[int]:
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     ctx.user_data.clear()
     await update.message.reply_text(
-        M.TEXTO_BIENVENIDA, reply_markup=M.menu_principal_kb()
+        M.TEXTO_BIENVENIDA, reply_markup=_menu_kb(ctx)
     )
 
 
 async def cmd_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     ctx.user_data.clear()
     await update.message.reply_text(
-        M.TEXTO_MENU, reply_markup=M.menu_principal_kb()
+        M.TEXTO_MENU, reply_markup=_menu_kb(ctx)
     )
 
 
@@ -216,7 +221,7 @@ async def cmd_sandbox(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     if ctx.user_data.get("sandbox"):
         ctx.user_data["sandbox"] = False
         await update.message.reply_text(
-            "✅ Volviste al modo real.", reply_markup=M.menu_principal_kb()
+            "✅ Volviste al modo real.", reply_markup=_menu_kb(ctx)
         )
     else:
         ctx.user_data["sandbox"] = True
@@ -227,7 +232,7 @@ async def cmd_sandbox(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             "documentos, pagos) se guarda en una base de datos separada y no "
             "genera notificaciones reales a nadie. Envía /sandbox de nuevo para "
             "volver al modo real.",
-            parse_mode=ParseMode.MARKDOWN, reply_markup=M.menu_principal_kb(),
+            parse_mode=ParseMode.MARKDOWN, reply_markup=_menu_kb(ctx),
         )
 
 
@@ -343,7 +348,7 @@ async def _admin_salir(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     ctx.user_data["is_admin"] = False
     ctx.user_data["sandbox"] = False
     query = update.callback_query
-    await _editar_menu(query, ctx, "🔚 Saliste del panel admin.\n\n" + M.TEXTO_MENU, M.menu_principal_kb())
+    await _editar_menu(query, ctx, "🔚 Saliste del panel admin.\n\n" + M.TEXTO_MENU, _menu_kb(ctx))
 
 
 # --- Router del menú principal (callbacks) --------------------------------
@@ -357,7 +362,7 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     ctx.user_data.pop("pago_solicitud_id", None)
 
     if data == M.CB_MENU or data == M.CB_VOLVER:
-        await _editar_menu(query, ctx, M.TEXTO_MENU, M.menu_principal_kb())
+        await _editar_menu(query, ctx, M.TEXTO_MENU, _menu_kb(ctx))
     elif data == M.CB_SERVICIOS:
         await _editar_menu(query, ctx, M.TEXTO_SERVICIOS, M.servicios_kb())
     elif data.startswith(M.CB_PRECIO_PREFIX):
@@ -385,7 +390,10 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if sid is not None:
             await _iniciar_subir_pago(update, ctx, sid)
     elif data == M.CB_CONSULTAR:
-        await _iniciar_consulta_titulo(update, ctx)
+        if not ctx.user_data.get("is_admin"):
+            await query.answer("No autorizado.", show_alert=True)
+        else:
+            await _iniciar_consulta_titulo(update, ctx)
     elif data.startswith(M.CB_ADMIN_VER_PREFIX):
         sid = _parse_id(data, M.CB_ADMIN_VER_PREFIX)
         if sid is not None:
@@ -515,7 +523,7 @@ async def on_texto(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             await _enviar_admin_menu(update, ctx)
         else:
             await update.message.reply_text(
-                "❌ PIN incorrecto.", reply_markup=M.menu_principal_kb()
+                "❌ PIN incorrecto.", reply_markup=_menu_kb(ctx)
             )
         return
 
@@ -525,14 +533,14 @@ async def on_texto(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         if not codigo:
             await update.message.reply_text(
                 "Código vacío. Inténtalo de nuevo o usa /menu.",
-                reply_markup=M.menu_principal_kb(),
+                reply_markup=_menu_kb(ctx),
             )
             return
         await _consultar_titulo(update, ctx, codigo)
         return
 
     # En cualquier otro caso, reenvía el menú.
-    await update.message.reply_text(M.TEXTO_MENU, reply_markup=M.menu_principal_kb())
+    await update.message.reply_text(M.TEXTO_MENU, reply_markup=_menu_kb(ctx))
 
 
 async def _consultar_titulo(update: Update, ctx: ContextTypes.DEFAULT_TYPE, codigo: str) -> None:
@@ -551,7 +559,7 @@ async def _consultar_titulo(update: Update, ctx: ContextTypes.DEFAULT_TYPE, codi
     if not titulos:
         await update.message.reply_text(
             f"No se encontró ningún título con el código '{codigo}'.",
-            reply_markup=M.menu_principal_kb(),
+            reply_markup=_menu_kb(ctx),
         )
         return
 
@@ -561,7 +569,7 @@ async def _consultar_titulo(update: Update, ctx: ContextTypes.DEFAULT_TYPE, codi
             text = text[: MAX_MSG_LEN - 20] + "\n…(truncado)"
         await update.message.reply_text(text)
     await update.message.reply_text(
-        "¿Algo más? Selecciona una opción:", reply_markup=M.menu_principal_kb()
+        "¿Algo más? Selecciona una opción:", reply_markup=_menu_kb(ctx)
     )
 
 
@@ -588,7 +596,7 @@ async def on_documento(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 "⚠️ Primero selecciona un proceso: ve a *📊 Mis procesos*, elige "
                 "uno y pulsa *📄 Subir documentos* o *💳 Subir soporte de pago*.",
             ),
-            parse_mode=ParseMode.MARKDOWN, reply_markup=M.menu_principal_kb(),
+            parse_mode=ParseMode.MARKDOWN, reply_markup=_menu_kb(ctx),
         )
         return
 
@@ -598,7 +606,7 @@ async def on_documento(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         ctx.user_data.pop("pago_solicitud_id", None)
         await update.message.reply_text(
             _con_banner(ctx, "⚠️ Ese proceso ya no está disponible."),
-            parse_mode=ParseMode.MARKDOWN, reply_markup=M.menu_principal_kb(),
+            parse_mode=ParseMode.MARKDOWN, reply_markup=_menu_kb(ctx),
         )
         return
 
@@ -716,7 +724,7 @@ async def wizard_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if codigo not in S.SERVICIOS:
         await query.edit_message_text(
             _con_banner(ctx, "⚠️ Servicio no válido. Vuelve a *📌 Servicios* e inténtalo de nuevo."),
-            parse_mode=ParseMode.MARKDOWN, reply_markup=M.menu_principal_kb(),
+            parse_mode=ParseMode.MARKDOWN, reply_markup=_menu_kb(ctx),
         )
         return ConversationHandler.END
 
@@ -837,9 +845,9 @@ async def wizard_cancelar(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
     texto = _con_banner(ctx, "❌ Solicitud cancelada.")
     if update.callback_query:
         await update.callback_query.answer()
-        await update.callback_query.edit_message_text(texto, parse_mode=ParseMode.MARKDOWN, reply_markup=M.menu_principal_kb())
+        await update.callback_query.edit_message_text(texto, parse_mode=ParseMode.MARKDOWN, reply_markup=_menu_kb(ctx))
     else:
-        await update.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN, reply_markup=M.menu_principal_kb())
+        await update.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN, reply_markup=_menu_kb(ctx))
     return ConversationHandler.END
 
 
