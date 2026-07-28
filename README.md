@@ -143,6 +143,13 @@ menú de quien esté autenticado como administrador (`/admin`).
   acciones por proceso: confirmar el soporte de pago, avanzar/retroceder el
   estado manualmente y reenviar los documentos subidos al chat del admin. Si
   `MINTRACK_ADMIN_PIN` no está configurada, `/admin` queda deshabilitado.
+- **Invitar cliente**: desde el panel admin, *➕ Invitar cliente* pide un
+  número de celular y genera un link personal (`t.me/<bot>?start=inv_XXXX`)
+  para que lo envíes tú mismo por WhatsApp o SMS — Telegram no permite que el
+  bot le escriba primero a un número que nunca lo ha contactado, así que no
+  hay forma de "enviar" la invitación automáticamente. Cuando la persona abre
+  el link y pulsa *Iniciar*, la invitación queda marcada como aceptada y se
+  te notifica; *📨 Mis invitaciones* muestra el estado de las que has creado.
 - **`/sandbox`**: solo para quien ya se autenticó con `/admin`. Activa un modo
   de pruebas que usa una base de datos SQLite separada
   (`MINTRACK_SANDBOX_DB_PATH`, por defecto `<db>_sandbox.db`) y por lo tanto

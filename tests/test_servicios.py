@@ -148,6 +148,22 @@ class MenuServiciosTests(unittest.TestCase):
         self.assertIn(f"{M.CB_DOC_PREFIX}7", callbacks)
         self.assertIn(f"{M.CB_PAGO_PREFIX}7", callbacks)
 
+    def test_admin_procesos_kb_incluye_invitar_y_ver_invitaciones(self) -> None:
+        kb = M.admin_procesos_kb([])
+        callbacks = [b.callback_data for row in kb.inline_keyboard for b in row]
+        self.assertIn(M.CB_ADMIN_INVITAR, callbacks)
+        self.assertIn(M.CB_ADMIN_INVITACIONES, callbacks)
+
+    def test_texto_invitaciones_vacio_y_con_datos(self) -> None:
+        self.assertIn("Todavía no has enviado", M.texto_invitaciones([]))
+        with tempfile.TemporaryDirectory() as directory:
+            db = Database(str(Path(directory) / "test.db"))
+            db.crear_invitacion("inv_1", "3001234567", creado_por=42)
+            texto = M.texto_invitaciones(db.listar_invitaciones(42))
+            self.assertIn("3001234567", texto)
+            self.assertIn("Pendiente", texto)
+            db.close()
+
     def test_admin_proceso_kb_confirmar_pago_solo_si_pendiente(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             db = Database(str(Path(directory) / "test.db"))
@@ -255,6 +271,50 @@ class AdminsTests(unittest.TestCase):
             db.registrar_admin(42)
             db.registrar_admin(42)  # idempotente
             self.assertEqual(db.admins_conocidos(), [42])
+            db.close()
+
+
+class InvitacionesTests(unittest.TestCase):
+    def test_crear_invitacion_queda_pendiente(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db = Database(str(Path(directory) / "test.db"))
+            inv = db.crear_invitacion("inv_abc123", "3001234567", creado_por=42)
+            self.assertEqual(inv.estado, "PENDIENTE")
+            self.assertIsNone(inv.aceptado_por)
+            db.close()
+
+    def test_aceptar_invitacion_la_marca_aceptada(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db = Database(str(Path(directory) / "test.db"))
+            db.crear_invitacion("inv_abc123", "3001234567", creado_por=42)
+            aceptada = db.aceptar_invitacion("inv_abc123", user_id=999)
+            self.assertEqual(aceptada.estado, "ACEPTADA")
+            self.assertEqual(aceptada.aceptado_por, 999)
+            db.close()
+
+    def test_invitacion_ya_usada_no_se_reasigna(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db = Database(str(Path(directory) / "test.db"))
+            db.crear_invitacion("inv_abc123", "3001234567", creado_por=42)
+            db.aceptar_invitacion("inv_abc123", user_id=999)
+            segundo_intento = db.aceptar_invitacion("inv_abc123", user_id=111)
+            self.assertEqual(segundo_intento.aceptado_por, 999)  # sigue siendo el primero
+            db.close()
+
+    def test_aceptar_invitacion_inexistente_devuelve_none(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db = Database(str(Path(directory) / "test.db"))
+            self.assertIsNone(db.aceptar_invitacion("inv_no_existe", user_id=999))
+            db.close()
+
+    def test_listar_invitaciones_filtra_por_admin(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            db = Database(str(Path(directory) / "test.db"))
+            db.crear_invitacion("inv_1", "3001111111", creado_por=42)
+            db.crear_invitacion("inv_2", "3002222222", creado_por=42)
+            db.crear_invitacion("inv_3", "3003333333", creado_por=7)
+            self.assertEqual(len(db.listar_invitaciones(42)), 2)
+            self.assertEqual(len(db.listar_invitaciones(7)), 1)
             db.close()
 
 

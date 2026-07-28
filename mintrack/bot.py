@@ -26,6 +26,7 @@ import hmac
 import logging
 import os
 import re
+import secrets
 from typing import Optional
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -169,9 +170,28 @@ def _parse_id(data: str, prefix: str) -> Optional[int]:
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     ctx.user_data.clear()
+    args = ctx.args or []
+    if args and args[0].startswith("inv_"):
+        await _procesar_invitacion(update, ctx, args[0])
     await update.message.reply_text(
         M.TEXTO_BIENVENIDA, reply_markup=_menu_kb(ctx)
     )
+
+
+async def _procesar_invitacion(update: Update, ctx: ContextTypes.DEFAULT_TYPE, token: str) -> None:
+    """Marca como aceptado el link de invitación con el que llegó /start, y
+    avisa al admin que lo generó."""
+    db = _get_db(ctx)
+    inv = db.aceptar_invitacion(token, update.effective_user.id)
+    if not inv or inv.estado != "ACEPTADA" or inv.aceptado_por != update.effective_user.id:
+        return  # token inexistente o ya usado por otra persona
+    try:
+        await ctx.application.bot.send_message(
+            chat_id=inv.creado_por,
+            text=f"✅ Tu invitación a {inv.telefono} fue aceptada. Ya puede usar el bot.",
+        )
+    except Exception as exc:
+        logger.warning("No se pudo notificar la invitación aceptada a %s: %s", inv.creado_por, exc)
 
 
 async def cmd_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -195,6 +215,7 @@ async def cmd_help(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
 # --- /admin y /sandbox ------------------------------------------------------
 
 FLAG_ADMIN_PIN = "esperando_admin_pin"
+FLAG_ADMIN_INVITAR_TEL = "esperando_telefono_invitacion"
 
 
 async def cmd_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -344,9 +365,37 @@ async def _admin_reenviar_documentos(update: Update, ctx: ContextTypes.DEFAULT_T
             logger.warning("No se pudo reenviar el documento %s: %s", d["file_name"], exc)
 
 
+async def _admin_iniciar_invitacion(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Pide el teléfono de la persona a invitar (el link se genera al recibirlo)."""
+    query = update.callback_query
+    if not ctx.user_data.get("is_admin"):
+        await query.answer("No autorizado.", show_alert=True)
+        return
+    ctx.user_data[FLAG_ADMIN_INVITAR_TEL] = True
+    await _editar_menu(
+        query, ctx,
+        "➕ *Invitar cliente*\n\nEscribe el número de celular (Colombia) de la "
+        "persona que quieres invitar. Te daré un link para que se lo envíes "
+        "por WhatsApp o SMS (el bot no puede escribirle directo si nunca lo "
+        "ha contactado).",
+        M.admin_volver_kb(),
+    )
+
+
+async def _admin_ver_invitaciones(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not ctx.user_data.get("is_admin"):
+        await query.answer("No autorizado.", show_alert=True)
+        return
+    db = _get_db(ctx)
+    invitaciones = db.listar_invitaciones(update.effective_user.id)
+    await _editar_menu(query, ctx, M.texto_invitaciones(invitaciones), M.admin_volver_kb())
+
+
 async def _admin_salir(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     ctx.user_data["is_admin"] = False
     ctx.user_data["sandbox"] = False
+    ctx.user_data.pop(FLAG_ADMIN_INVITAR_TEL, None)
     query = update.callback_query
     await _editar_menu(query, ctx, "🔚 Saliste del panel admin.\n\n" + M.TEXTO_MENU, _menu_kb(ctx))
 
@@ -360,6 +409,7 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     ctx.user_data.pop("servicio_visto", None)
     ctx.user_data.pop("doc_solicitud_id", None)
     ctx.user_data.pop("pago_solicitud_id", None)
+    ctx.user_data.pop(FLAG_ADMIN_INVITAR_TEL, None)
 
     if data == M.CB_MENU or data == M.CB_VOLVER:
         await _editar_menu(query, ctx, M.TEXTO_MENU, _menu_kb(ctx))
@@ -414,6 +464,10 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         sid = _parse_id(data, M.CB_ADMIN_DOCS_PREFIX)
         if sid is not None:
             await _admin_reenviar_documentos(update, ctx, sid)
+    elif data == M.CB_ADMIN_INVITAR:
+        await _admin_iniciar_invitacion(update, ctx)
+    elif data == M.CB_ADMIN_INVITACIONES:
+        await _admin_ver_invitaciones(update, ctx)
     elif data == M.CB_ADMIN_MENU:
         await _enviar_admin_menu(update, ctx)
     elif data == M.CB_ADMIN_SALIR:
@@ -525,6 +579,33 @@ async def on_texto(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
             await update.message.reply_text(
                 "❌ PIN incorrecto.", reply_markup=_menu_kb(ctx)
             )
+        return
+
+    if ctx.user_data.get(FLAG_ADMIN_INVITAR_TEL):
+        ctx.user_data[FLAG_ADMIN_INVITAR_TEL] = False
+        if not ctx.user_data.get("is_admin"):
+            await update.message.reply_text(
+                "🔒 Sesión admin expirada. Usa /admin.", reply_markup=_menu_kb(ctx)
+            )
+            return
+        tel = _telefono_normalizado(update.message.text or "")
+        if not tel:
+            await update.message.reply_text(
+                "Número inválido. Escribe un celular colombiano de 10 dígitos "
+                "que empiece en 3 (puedes incluir +57, espacios o guiones).",
+                reply_markup=M.admin_volver_kb(),
+            )
+            return
+        db = _get_db(ctx)
+        token = f"inv_{secrets.token_urlsafe(8)}"
+        db.crear_invitacion(token=token, telefono=tel, creado_por=update.effective_user.id)
+        link = f"https://t.me/{ctx.bot.username}?start={token}"
+        await update.message.reply_text(
+            f"✅ Invitación creada para *{tel}*.\n\nCompártele este link por "
+            f"WhatsApp o SMS:\n{link}\n\nCuando la persona lo abra y pulse "
+            "*Iniciar*, quedará registrada como aceptada y te avisaré aquí.",
+            parse_mode=ParseMode.MARKDOWN, reply_markup=M.admin_volver_kb(),
+        )
         return
 
     if ctx.user_data.get(FLAG_CONSULTA):

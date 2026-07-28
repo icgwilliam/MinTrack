@@ -78,6 +78,10 @@ PAGO_LABELS = {
     PAGO_CONFIRMADO: "Confirmado",
 }
 
+# Estado de una invitación de cliente generada desde el panel admin.
+INVITACION_PENDIENTE = "PENDIENTE"
+INVITACION_ACEPTADA = "ACEPTADA"
+
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS solicitudes (
@@ -116,6 +120,22 @@ CREATE TABLE IF NOT EXISTS admins (
     user_id INTEGER PRIMARY KEY,
     authenticated_at REAL NOT NULL
 );
+
+-- Invitaciones generadas desde el panel admin: un link personal
+-- (t.me/<bot>?start=<token>) que el admin comparte por WhatsApp/SMS, ya que
+-- Telegram no permite que el bot le escriba primero a un número que nunca lo
+-- ha contactado.
+CREATE TABLE IF NOT EXISTS invitaciones (
+    token TEXT PRIMARY KEY,
+    telefono TEXT NOT NULL,
+    creado_por INTEGER NOT NULL,
+    created_at REAL NOT NULL,
+    estado TEXT NOT NULL DEFAULT 'PENDIENTE',   -- PENDIENTE | ACEPTADA
+    aceptado_por INTEGER,
+    aceptado_at REAL
+);
+
+CREATE INDEX IF NOT EXISTS idx_invitaciones_creado_por ON invitaciones(creado_por);
 
 -- Suscripciones de usuarios a expedientes para monitoreo (centinela).
 CREATE TABLE IF NOT EXISTS suscripciones (
@@ -174,6 +194,21 @@ class Solicitud:
     def servicios(self) -> list[str]:
         """Códigos de servicio contratados (uno o varios, según BR-001)."""
         return [s.strip() for s in self.servicio.split(",") if s.strip()]
+
+
+@dataclass
+class Invitacion:
+    token: str
+    telefono: str
+    creado_por: int
+    created_at: float
+    estado: str
+    aceptado_por: Optional[int]
+    aceptado_at: Optional[float]
+
+    @property
+    def estado_label(self) -> str:
+        return "✅ Aceptada" if self.estado == INVITACION_ACEPTADA else "⏳ Pendiente"
 
 
 @dataclass
@@ -462,6 +497,48 @@ class Database:
         with self._cursor() as cur:
             rows = cur.execute("SELECT user_id FROM admins").fetchall()
         return [int(r["user_id"]) for r in rows]
+
+    # ---- Invitaciones -------------------------------------------------------
+
+    def crear_invitacion(self, token: str, telefono: str, creado_por: int) -> Invitacion:
+        now = time.time()
+        with self._cursor() as cur:
+            cur.execute(
+                """INSERT INTO invitaciones
+                   (token, telefono, creado_por, created_at, estado)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (token, telefono, creado_por, now, INVITACION_PENDIENTE),
+            )
+        return self.obtener_invitacion(token)
+
+    def obtener_invitacion(self, token: str) -> Optional[Invitacion]:
+        with self._cursor() as cur:
+            row = cur.execute(
+                "SELECT * FROM invitaciones WHERE token = ? LIMIT 1", (token,)
+            ).fetchone()
+        if not row:
+            return None
+        return Invitacion(**dict(row))
+
+    def aceptar_invitacion(self, token: str, user_id: int) -> Optional[Invitacion]:
+        """Marca la invitación como aceptada por user_id (solo si seguía
+        pendiente; una invitación ya usada no se reasigna)."""
+        now = time.time()
+        with self._cursor() as cur:
+            cur.execute(
+                """UPDATE invitaciones SET estado = ?, aceptado_por = ?, aceptado_at = ?
+                   WHERE token = ? AND estado = ?""",
+                (INVITACION_ACEPTADA, user_id, now, token, INVITACION_PENDIENTE),
+            )
+        return self.obtener_invitacion(token)
+
+    def listar_invitaciones(self, creado_por: int) -> list[Invitacion]:
+        with self._cursor() as cur:
+            rows = cur.execute(
+                "SELECT * FROM invitaciones WHERE creado_por = ? ORDER BY created_at DESC",
+                (creado_por,),
+            ).fetchall()
+        return [Invitacion(**dict(r)) for r in rows]
 
     # ---- Suscripciones (centinela) ---------------------------------------
 

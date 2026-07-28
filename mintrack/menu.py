@@ -52,6 +52,8 @@ CB_ADMIN_PAGO_OK_PREFIX = "ap_"        # ap_<id> confirmar pago
 CB_ADMIN_AVANZAR_PREFIX = "aa_"        # aa_<id> avanzar estado
 CB_ADMIN_RETROCEDER_PREFIX = "ar_"     # ar_<id> retroceder estado
 CB_ADMIN_DOCS_PREFIX = "ad_"           # ad_<id> reenviar documentos al admin
+CB_ADMIN_INVITAR = "adi"               # iniciar el flujo de invitar un cliente
+CB_ADMIN_INVITACIONES = "adn"          # ver las invitaciones enviadas
 
 
 # --- Keyboards ------------------------------------------------------------
@@ -153,6 +155,10 @@ def cancelar_kb() -> InlineKeyboardMarkup:
 
 def admin_procesos_kb(solicitudes: list[D.Solicitud]) -> InlineKeyboardMarkup:
     filas = [
+        [InlineKeyboardButton("➕ Invitar cliente", callback_data=CB_ADMIN_INVITAR)],
+        [InlineKeyboardButton("📨 Mis invitaciones", callback_data=CB_ADMIN_INVITACIONES)],
+    ]
+    filas += [
         [
             InlineKeyboardButton(
                 f"#{s.id} · {S.nombres_csv(s.servicio)} — {s.estado_label}",
@@ -163,6 +169,17 @@ def admin_procesos_kb(solicitudes: list[D.Solicitud]) -> InlineKeyboardMarkup:
     ]
     filas.append([InlineKeyboardButton("🔚 Salir del panel admin", callback_data=CB_ADMIN_SALIR)])
     return InlineKeyboardMarkup(filas)
+
+
+def admin_volver_kb() -> InlineKeyboardMarkup:
+    """Teclado simple para pantallas admin sin acciones propias (esperar un
+    dato por chat, ver el listado de invitaciones)."""
+    return InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("⬅️ Volver al listado", callback_data=CB_ADMIN_MENU)],
+            [InlineKeyboardButton("🔚 Salir del panel admin", callback_data=CB_ADMIN_SALIR)],
+        ]
+    )
 
 
 def admin_proceso_kb(solicitud: D.Solicitud) -> InlineKeyboardMarkup:
@@ -218,6 +235,16 @@ def texto_precio_servicio(codigo: str) -> str:
     """Tarifa del servicio con el próximo paso del flujo de contratación."""
     s = S.SERVICIOS[codigo]
     return f"💰 *{s.nombre}*\n\nTarifa: *{s.precio}*\n\n{s.siguiente_paso}"
+
+
+def texto_invitaciones(invitaciones: list[D.Invitacion]) -> str:
+    """Listado de invitaciones que un admin ha generado (para su propio seguimiento)."""
+    if not invitaciones:
+        return "📨 *Mis invitaciones*\n\nTodavía no has enviado ninguna."
+    lineas = ["📨 *Mis invitaciones*\n"]
+    for inv in invitaciones:
+        lineas.append(f"• {inv.telefono} — {inv.estado_label}")
+    return "\n".join(lineas)
 
 
 def texto_proceso(solicitud: D.Solicitud, n_docs: int) -> str:
