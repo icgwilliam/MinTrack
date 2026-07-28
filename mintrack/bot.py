@@ -1,19 +1,28 @@
 """Bot de Telegram MinTrack con menú (inline keyboard).
 
-Menú principal: Servicios, Precios, Iniciar solicitud, Subir documentos,
-Estado de proceso y Consultar título minero.
+Menú principal: Servicios, Mis procesos y Consultar título minero.
 
 - La consulta usa ``existing_scripts/monitoreotitulo.py`` contra AnnA y SAR.
-- Las solicitudes, documentos y estados se persisten en SQLite (``mintrack.db``).
-- "Iniciar solicitud" es un wizard paso a paso (ConversationHandler).
-- El estado de proceso avanza automáticamente (reglas de tiempo + subida de docs).
+- Las solicitudes ("procesos"), documentos y estados se persisten en SQLite.
+  Un usuario puede tener varios procesos activos a la vez (uno por servicio
+  contratado); cada acción (subir documentos, subir soporte de pago) se hace
+  sobre un proceso concreto desde "📊 Mis procesos".
+- "Iniciar solicitud" es un wizard de 3 pasos (empresa/persona, identificación,
+  teléfono) que siempre parte de un servicio ya elegido en su ficha.
+- Cada proceso queda "En revisión" hasta que un administrador confirma el pago
+  (ver panel admin, comando ``/admin`` con PIN). Los estados siguientes sí
+  avanzan automáticamente por tiempo.
+- ``/sandbox`` (solo admin) activa un modo de pruebas que usa una base de
+  datos separada y no envía notificaciones reales.
 
 El token del bot se lee de la variable de entorno ``TELEGRAM_BOT_TOKEN``.
+El PIN del panel admin se lee de ``MINTRACK_ADMIN_PIN``.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hmac
 import logging
 import os
 import re
@@ -33,7 +42,7 @@ from telegram.ext import (
 )
 
 from .client import ANMClient, ANMError
-from .db import Database, ESTADO_COMPLETADO
+from .db import Database
 from .models import TituloMinero
 from . import centinela as C
 from . import menu as M
@@ -117,8 +126,16 @@ def _formatar_titulo(t: TituloMinero) -> str:
 
 # --- Helpers de respuesta --------------------------------------------------
 
-async def _editar_menu(query, texto: str, kb: InlineKeyboardMarkup) -> None:
+def _con_banner(ctx: ContextTypes.DEFAULT_TYPE, texto: str) -> str:
+    """Antepone un aviso cuando la sesión está en modo prueba (/sandbox)."""
+    if ctx.user_data.get("sandbox"):
+        return "🧪 *MODO PRUEBA* (nada de esto genera registros reales)\n\n" + texto
+    return texto
+
+
+async def _editar_menu(query, ctx: ContextTypes.DEFAULT_TYPE, texto: str, kb: InlineKeyboardMarkup) -> None:
     """Edita el mensaje del callback mostrando texto + keyboard."""
+    texto = _con_banner(ctx, texto)
     try:
         await query.edit_message_text(texto, reply_markup=kb, parse_mode=ParseMode.MARKDOWN)
     except Exception:
@@ -127,11 +144,20 @@ async def _editar_menu(query, texto: str, kb: InlineKeyboardMarkup) -> None:
 
 
 def _get_db(ctx: ContextTypes.DEFAULT_TYPE) -> Database:
+    if ctx.user_data.get("sandbox"):
+        return ctx.application.bot_data["db_sandbox"]
     return ctx.application.bot_data["db"]
 
 
 def _get_client(ctx: ContextTypes.DEFAULT_TYPE) -> ANMClient:
     return ctx.application.bot_data["anm_client"]
+
+
+def _parse_id(data: str, prefix: str) -> Optional[int]:
+    try:
+        return int(data[len(prefix):])
+    except ValueError:
+        return None
 
 
 # --- /start y /menu -------------------------------------------------------
@@ -154,9 +180,170 @@ async def cmd_help(update: Update, _ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "*MinTrack* — menú de servicios mineros y consulta de títulos.\n\n"
         "/start — menú principal\n/menu — mostrar el menú en cualquier momento\n"
+        "/admin — panel de administrador (pide PIN)\n"
+        "/sandbox — modo de pruebas, solo tras autenticarte en /admin\n"
         "Usa los botones para navegar.",
         parse_mode=ParseMode.MARKDOWN,
     )
+
+
+# --- /admin y /sandbox ------------------------------------------------------
+
+FLAG_ADMIN_PIN = "esperando_admin_pin"
+
+
+async def cmd_admin(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if ctx.user_data.get("is_admin"):
+        await _enviar_admin_menu(update, ctx)
+        return
+    pin = os.environ.get("MINTRACK_ADMIN_PIN")
+    if not pin:
+        await update.message.reply_text(
+            "⚠️ El panel admin no está configurado. Define la variable de "
+            "entorno MINTRACK_ADMIN_PIN."
+        )
+        return
+    ctx.user_data[FLAG_ADMIN_PIN] = True
+    await update.message.reply_text("🔒 Escribe el PIN de administrador:")
+
+
+async def cmd_sandbox(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not ctx.user_data.get("is_admin"):
+        await update.message.reply_text(
+            "🔒 Necesitas autenticarte como admin primero. Usa /admin."
+        )
+        return
+    if ctx.user_data.get("sandbox"):
+        ctx.user_data["sandbox"] = False
+        await update.message.reply_text(
+            "✅ Volviste al modo real.", reply_markup=M.menu_principal_kb()
+        )
+    else:
+        ctx.user_data["sandbox"] = True
+        ctx.user_data.pop("doc_solicitud_id", None)
+        ctx.user_data.pop("pago_solicitud_id", None)
+        await update.message.reply_text(
+            "🧪 *Modo prueba activado.*\n\nTodo lo que hagas ahora (solicitudes, "
+            "documentos, pagos) se guarda en una base de datos separada y no "
+            "genera notificaciones reales a nadie. Envía /sandbox de nuevo para "
+            "volver al modo real.",
+            parse_mode=ParseMode.MARKDOWN, reply_markup=M.menu_principal_kb(),
+        )
+
+
+async def _enviar_admin_menu(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    db = _get_db(ctx)
+    solicitudes = db.listar_todas_solicitudes()
+    if solicitudes:
+        texto = f"🔑 *Panel admin*\n\n{len(solicitudes)} proceso(s) registrados. Selecciona uno:"
+    else:
+        texto = "🔑 *Panel admin*\n\nTodavía no hay procesos registrados."
+    kb = M.admin_procesos_kb(solicitudes)
+    if update.callback_query:
+        await _editar_menu(update.callback_query, ctx, texto, kb)
+    else:
+        await update.message.reply_text(
+            _con_banner(ctx, texto), parse_mode=ParseMode.MARKDOWN, reply_markup=kb
+        )
+
+
+async def _admin_ver_proceso(update: Update, ctx: ContextTypes.DEFAULT_TYPE, solicitud_id: int) -> None:
+    query = update.callback_query
+    if not ctx.user_data.get("is_admin"):
+        await query.answer("No autorizado.", show_alert=True)
+        return
+    db = _get_db(ctx)
+    sol = db.obtener_solicitud_por_id(solicitud_id)
+    if not sol:
+        await _editar_menu(query, ctx, "⚠️ Proceso no encontrado.", M.admin_procesos_kb(db.listar_todas_solicitudes()))
+        return
+    n_docs = db.contar_documentos(sol.id)
+    await _editar_menu(query, ctx, M.texto_proceso(sol, n_docs), M.admin_proceso_kb(sol))
+
+
+async def _admin_confirmar_pago(update: Update, ctx: ContextTypes.DEFAULT_TYPE, solicitud_id: int) -> None:
+    query = update.callback_query
+    if not ctx.user_data.get("is_admin"):
+        await query.answer("No autorizado.", show_alert=True)
+        return
+    db = _get_db(ctx)
+    sol = db.confirmar_pago(solicitud_id)
+    if not sol:
+        await _editar_menu(query, ctx, "⚠️ Proceso no encontrado.", M.admin_procesos_kb(db.listar_todas_solicitudes()))
+        return
+    n_docs = db.contar_documentos(sol.id)
+    await _editar_menu(query, ctx, "✅ Pago confirmado.\n\n" + M.texto_proceso(sol, n_docs), M.admin_proceso_kb(sol))
+    try:
+        await ctx.application.bot.send_message(
+            chat_id=sol.user_id,
+            text=(
+                f"✅ Confirmamos el pago de tu proceso #{sol.id}. "
+                f"Estado actual: *{sol.estado_label}*."
+            ),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+    except Exception as exc:
+        logger.warning("No se pudo notificar la confirmación de pago a %s: %s", sol.user_id, exc)
+
+
+async def _admin_cambiar_estado(
+    update: Update, ctx: ContextTypes.DEFAULT_TYPE, solicitud_id: int, avanzar: bool
+) -> None:
+    query = update.callback_query
+    if not ctx.user_data.get("is_admin"):
+        await query.answer("No autorizado.", show_alert=True)
+        return
+    db = _get_db(ctx)
+    sol = db.avanzar_estado(solicitud_id) if avanzar else db.retroceder_estado(solicitud_id)
+    if not sol:
+        await _editar_menu(query, ctx, "⚠️ Proceso no encontrado.", M.admin_procesos_kb(db.listar_todas_solicitudes()))
+        return
+    n_docs = db.contar_documentos(sol.id)
+    await _editar_menu(query, ctx, M.texto_proceso(sol, n_docs), M.admin_proceso_kb(sol))
+    try:
+        await ctx.application.bot.send_message(
+            chat_id=sol.user_id,
+            text=(
+                f"📊 Actualización de tu proceso #{sol.id} "
+                f"({S.nombres_csv(sol.servicio)}):\nEstado: *{sol.estado_label}*."
+            ),
+            parse_mode=ParseMode.MARKDOWN,
+        )
+    except Exception as exc:
+        logger.warning("No se pudo notificar el cambio de estado a %s: %s", sol.user_id, exc)
+
+
+async def _admin_reenviar_documentos(update: Update, ctx: ContextTypes.DEFAULT_TYPE, solicitud_id: int) -> None:
+    query = update.callback_query
+    if not ctx.user_data.get("is_admin"):
+        await query.answer("No autorizado.", show_alert=True)
+        return
+    db = _get_db(ctx)
+    docs = db.listar_documentos(solicitud_id)
+    await query.answer(f"Reenviando {len(docs)} documento(s)…")
+    admin_chat_id = update.effective_user.id
+    if not docs:
+        await ctx.application.bot.send_message(chat_id=admin_chat_id, text="No hay documentos para este proceso.")
+        return
+    for d in docs:
+        try:
+            if d["tipo"] == "imagen":
+                await ctx.application.bot.send_photo(
+                    chat_id=admin_chat_id, photo=d["file_id"], caption=d["file_name"] or ""
+                )
+            else:
+                await ctx.application.bot.send_document(
+                    chat_id=admin_chat_id, document=d["file_id"], caption=d["file_name"] or ""
+                )
+        except Exception as exc:
+            logger.warning("No se pudo reenviar el documento %s: %s", d["file_name"], exc)
+
+
+async def _admin_salir(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    ctx.user_data["is_admin"] = False
+    ctx.user_data["sandbox"] = False
+    query = update.callback_query
+    await _editar_menu(query, ctx, "🔚 Saliste del panel admin.\n\n" + M.TEXTO_MENU, M.menu_principal_kb())
 
 
 # --- Router del menú principal (callbacks) --------------------------------
@@ -166,57 +353,131 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await query.answer()
     data = query.data or ""
     ctx.user_data.pop("servicio_visto", None)
+    ctx.user_data.pop("doc_solicitud_id", None)
+    ctx.user_data.pop("pago_solicitud_id", None)
 
     if data == M.CB_MENU or data == M.CB_VOLVER:
-        await _editar_menu(query, M.TEXTO_MENU, M.menu_principal_kb())
+        await _editar_menu(query, ctx, M.TEXTO_MENU, M.menu_principal_kb())
     elif data == M.CB_SERVICIOS:
-        await _editar_menu(query, M.TEXTO_SERVICIOS, M.servicios_kb())
+        await _editar_menu(query, ctx, M.TEXTO_SERVICIOS, M.servicios_kb())
     elif data.startswith(M.CB_PRECIO_PREFIX):
         key = data[len(M.CB_PRECIO_PREFIX):]
         if key in S.SERVICIOS:
             ctx.user_data["servicio_visto"] = key
-            await _editar_menu(query, M.texto_precio_servicio(key), M.precio_kb(key))
+            await _editar_menu(query, ctx, M.texto_precio_servicio(key), M.precio_kb(key))
     elif data.startswith(M.CB_SERVICIO_PREFIX):
         key = data[len(M.CB_SERVICIO_PREFIX):]
         if key in S.SERVICIOS:
             ctx.user_data["servicio_visto"] = key
-            await _editar_menu(query, M.texto_servicio(key), M.servicio_kb(key))
+            await _editar_menu(query, ctx, M.texto_servicio(key), M.servicio_kb(key))
     elif data == M.CB_ESTADO:
-        await _mostrar_estado(update, ctx)
+        await _mostrar_procesos(update, ctx)
+    elif data.startswith(M.CB_PROCESO_PREFIX):
+        sid = _parse_id(data, M.CB_PROCESO_PREFIX)
+        if sid is not None:
+            await _mostrar_proceso(update, ctx, sid)
+    elif data.startswith(M.CB_DOC_PREFIX):
+        sid = _parse_id(data, M.CB_DOC_PREFIX)
+        if sid is not None:
+            await _iniciar_subir_documentos(update, ctx, sid)
+    elif data.startswith(M.CB_PAGO_PREFIX):
+        sid = _parse_id(data, M.CB_PAGO_PREFIX)
+        if sid is not None:
+            await _iniciar_subir_pago(update, ctx, sid)
     elif data == M.CB_CONSULTAR:
         await _iniciar_consulta_titulo(update, ctx)
-    elif data == M.CB_SUBIR:
-        await _mostrar_subir_documentos(update, ctx)
-    # CB_INICIAR, CB_INICIAR_PREFIX y CB_CANCELAR se manejan en el ConversationHandler.
+    elif data.startswith(M.CB_ADMIN_VER_PREFIX):
+        sid = _parse_id(data, M.CB_ADMIN_VER_PREFIX)
+        if sid is not None:
+            await _admin_ver_proceso(update, ctx, sid)
+    elif data.startswith(M.CB_ADMIN_PAGO_OK_PREFIX):
+        sid = _parse_id(data, M.CB_ADMIN_PAGO_OK_PREFIX)
+        if sid is not None:
+            await _admin_confirmar_pago(update, ctx, sid)
+    elif data.startswith(M.CB_ADMIN_AVANZAR_PREFIX):
+        sid = _parse_id(data, M.CB_ADMIN_AVANZAR_PREFIX)
+        if sid is not None:
+            await _admin_cambiar_estado(update, ctx, sid, avanzar=True)
+    elif data.startswith(M.CB_ADMIN_RETROCEDER_PREFIX):
+        sid = _parse_id(data, M.CB_ADMIN_RETROCEDER_PREFIX)
+        if sid is not None:
+            await _admin_cambiar_estado(update, ctx, sid, avanzar=False)
+    elif data.startswith(M.CB_ADMIN_DOCS_PREFIX):
+        sid = _parse_id(data, M.CB_ADMIN_DOCS_PREFIX)
+        if sid is not None:
+            await _admin_reenviar_documentos(update, ctx, sid)
+    elif data == M.CB_ADMIN_MENU:
+        await _enviar_admin_menu(update, ctx)
+    elif data == M.CB_ADMIN_SALIR:
+        await _admin_salir(update, ctx)
+    # CB_INICIAR_PREFIX y CB_CANCELAR se manejan en el ConversationHandler.
 
 
-# --- Estado de proceso ----------------------------------------------------
+# --- Mis procesos -----------------------------------------------------------
 
-async def _mostrar_estado(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+async def _mostrar_procesos(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     db = _get_db(ctx)
-    sol = db.obtener_solicitud(update.effective_user.id)
-    if not sol:
+    solicitudes = db.listar_solicitudes(update.effective_user.id)
+    if not solicitudes:
         await _editar_menu(
-            query,
-            "📊 *Estado de proceso*\n\nNo tienes solicitudes activas. "
-            "Usa *🚀 Iniciar solicitud* para crear una.",
+            query, ctx,
+            "📊 *Mis procesos*\n\nNo tienes procesos activos. Ve a *📌 Servicios* "
+            "para contratar uno.",
             M.estado_kb(),
         )
         return
-    # Sincroniza avance automático por tiempo.
-    sol = db.sincronizar_estado(update.effective_user.id)
-    n_docs = db.contar_documentos(update.effective_user.id)
-    texto = (
-        "📊 *Estado de proceso*\n\n"
-        f"• Solicitud #: {sol.id}\n"
-        f"• Servicio(s): {S.nombres_csv(sol.servicio)}\n"
-        f"• Empresa: {sol.empresa}\n"
-        f"• Contacto: {sol.contacto}\n"
-        f"• Estado: *{sol.estado_label}*\n"
-        f"• Documentos subidos: {n_docs}\n"
+    await _editar_menu(
+        query, ctx,
+        "📊 *Mis procesos*\n\nSelecciona uno para ver el detalle:",
+        M.procesos_kb(solicitudes),
     )
-    await _editar_menu(query, texto, M.estado_kb())
+
+
+async def _mostrar_proceso(update: Update, ctx: ContextTypes.DEFAULT_TYPE, solicitud_id: int) -> None:
+    query = update.callback_query
+    db = _get_db(ctx)
+    sol = db.obtener_solicitud_por_id(solicitud_id)
+    if not sol or sol.user_id != update.effective_user.id:
+        await _editar_menu(query, ctx, "⚠️ Proceso no encontrado.", M.estado_kb())
+        return
+    sol = db.sincronizar_estado(sol.id) or sol
+    n_docs = db.contar_documentos(sol.id)
+    await _editar_menu(query, ctx, M.texto_proceso(sol, n_docs), M.proceso_kb(sol.id))
+
+
+async def _iniciar_subir_documentos(update: Update, ctx: ContextTypes.DEFAULT_TYPE, solicitud_id: int) -> None:
+    query = update.callback_query
+    db = _get_db(ctx)
+    sol = db.obtener_solicitud_por_id(solicitud_id)
+    if not sol or sol.user_id != update.effective_user.id:
+        await _editar_menu(query, ctx, "⚠️ Proceso no encontrado.", M.estado_kb())
+        return
+    ctx.user_data["doc_solicitud_id"] = solicitud_id
+    await _editar_menu(
+        query, ctx,
+        f"📄 *Subir documentos* — Proceso #{solicitud_id}\n\nEnvía ahora los "
+        "archivos (PDF, imágenes o shapefiles) en este chat. Confirmaré cada "
+        "uno.\n\nCuando termines, vuelve a *📊 Mis procesos* para ver el resumen.",
+        M.proceso_kb(solicitud_id),
+    )
+
+
+async def _iniciar_subir_pago(update: Update, ctx: ContextTypes.DEFAULT_TYPE, solicitud_id: int) -> None:
+    query = update.callback_query
+    db = _get_db(ctx)
+    sol = db.obtener_solicitud_por_id(solicitud_id)
+    if not sol or sol.user_id != update.effective_user.id:
+        await _editar_menu(query, ctx, "⚠️ Proceso no encontrado.", M.estado_kb())
+        return
+    ctx.user_data["pago_solicitud_id"] = solicitud_id
+    await _editar_menu(
+        query, ctx,
+        f"💳 *Subir soporte de pago* — Proceso #{solicitud_id}\n\nEnvía el "
+        "comprobante de pago (PDF o imagen). Confirmaremos tu pago y el "
+        "proceso avanzará de estado.",
+        M.proceso_kb(solicitud_id),
+    )
 
 
 # --- Consulta de título minero (desde el menú) -----------------------------
@@ -233,7 +494,7 @@ async def _iniciar_consulta_titulo(update: Update, ctx: ContextTypes.DEFAULT_TYP
         [[InlineKeyboardButton("⬅️ Volver al menú", callback_data=M.CB_VOLVER)]]
     )
     await _editar_menu(
-        query,
+        query, ctx,
         "⛏️ *Consultar título minero*\n\nEscribe el código de expediente "
         "(formato AAA-#####, ej. ICQ-09083):",
         kb,
@@ -241,10 +502,23 @@ async def _iniciar_consulta_titulo(update: Update, ctx: ContextTypes.DEFAULT_TYP
 
 
 async def on_texto(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """Captura el código de título cuando el usuario está en esa espera.
+    """Captura PIN de admin, código de título o, en cualquier otro caso,
+    reenvía el menú principal."""
+    if ctx.user_data.get(FLAG_ADMIN_PIN):
+        ctx.user_data[FLAG_ADMIN_PIN] = False
+        pin_ingresado = (update.message.text or "").strip()
+        pin_real = os.environ.get("MINTRACK_ADMIN_PIN") or ""
+        if pin_real and hmac.compare_digest(pin_ingresado, pin_real):
+            ctx.user_data["is_admin"] = True
+            _get_db(ctx).registrar_admin(update.effective_user.id)
+            await update.message.reply_text("✅ Acceso admin concedido.")
+            await _enviar_admin_menu(update, ctx)
+        else:
+            await update.message.reply_text(
+                "❌ PIN incorrecto.", reply_markup=M.menu_principal_kb()
+            )
+        return
 
-    En cualquier otro caso, reenvía el menú principal.
-    """
     if ctx.user_data.get(FLAG_CONSULTA):
         ctx.user_data[FLAG_CONSULTA] = False
         codigo = (update.message.text or "").strip().upper()
@@ -291,7 +565,7 @@ async def _consultar_titulo(update: Update, ctx: ContextTypes.DEFAULT_TYPE, codi
     )
 
 
-# --- Subir documentos -----------------------------------------------------
+# --- Subir documentos / soporte de pago (por proceso) -----------------------
 
 DOC_DIR = os.environ.get(
     "MINTRACK_DOC_DIR",
@@ -299,32 +573,34 @@ DOC_DIR = os.environ.get(
 )
 
 
-async def _mostrar_subir_documentos(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    db = _get_db(ctx)
-    sol = db.obtener_solicitud(update.effective_user.id)
-    if not sol:
-        await _editar_menu(
-            query,
-            "📄 *Subir documentos*\n\nNo tienes una solicitud activa. "
-            "Primero usa *🚀 Iniciar solicitud*.",
-            M.servicios_kb(),
-        )
-        return
-    ctx.user_data["esperando_documento"] = True
-    await _editar_menu(
-        query,
-        "📄 *Subir documentos*\n\nEnvía ahora los archivos (PDF, imágenes o "
-        "shapefiles) en este chat. Confirmaré cada uno.\n\nCuando termines, "
-        "pulsa *📊 Estado de proceso* en el menú.",
-        M.estado_kb(),
-    )
-
-
 async def on_documento(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """Recibe archivos/imágenes y los registra/guarda."""
+    """Recibe archivos/imágenes y los registra contra el proceso seleccionado
+    (vía 📄 Subir documentos o 💳 Subir soporte de pago en 'Mis procesos')."""
     db = _get_db(ctx)
     user_id = update.effective_user.id
+
+    pago = bool(ctx.user_data.get("pago_solicitud_id"))
+    solicitud_id = ctx.user_data.get("pago_solicitud_id") or ctx.user_data.get("doc_solicitud_id")
+    if not solicitud_id:
+        await update.message.reply_text(
+            _con_banner(
+                ctx,
+                "⚠️ Primero selecciona un proceso: ve a *📊 Mis procesos*, elige "
+                "uno y pulsa *📄 Subir documentos* o *💳 Subir soporte de pago*.",
+            ),
+            parse_mode=ParseMode.MARKDOWN, reply_markup=M.menu_principal_kb(),
+        )
+        return
+
+    sol = db.obtener_solicitud_por_id(solicitud_id)
+    if not sol or sol.user_id != user_id:
+        ctx.user_data.pop("doc_solicitud_id", None)
+        ctx.user_data.pop("pago_solicitud_id", None)
+        await update.message.reply_text(
+            _con_banner(ctx, "⚠️ Ese proceso ya no está disponible."),
+            parse_mode=ParseMode.MARKDOWN, reply_markup=M.menu_principal_kb(),
+        )
+        return
 
     doc = update.message.document
     photo = update.message.photo
@@ -351,184 +627,198 @@ async def on_documento(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("⚠️ Envía un archivo (PDF, imagen o shape).")
         return
 
-    if not db.obtener_solicitud(user_id):
-        await update.message.reply_text(
-            "⚠️ Primero crea una solicitud con 🚀 Iniciar solicitud.",
-            reply_markup=M.menu_principal_kb(),
-        )
-        return
+    if pago:
+        tipo = "pago"
 
     try:
         tg_file = await file_obj.get_file()
         os.makedirs(DOC_DIR, exist_ok=True)
         safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", file_name or "doc")
-        ruta = os.path.join(DOC_DIR, f"{user_id}_{safe_name}")
+        ruta = os.path.join(DOC_DIR, f"{sol.id}_{safe_name}")
         await tg_file.download_to_drive(ruta)
     except Exception as exc:  # network / telegram error
         logger.warning("No se pudo descargar el archivo: %s", exc)
         ruta = None
 
     db.registrar_documento(
+        solicitud_id=sol.id,
         user_id=user_id,
         file_id=file_obj.file_id,
         file_name=file_name,
         tipo=tipo,
         ruta=ruta,
     )
-    # Si estaba en EN_REVISION y ya tiene documentos, avanzar a EN_PROCESO.
-    db.sincronizar_estado(user_id)
-    await update.message.reply_text(
-        f"✅ Documento recibido: *{file_name}* ({tipo}).\n"
-        f"Total subido: {db.contar_documentos(user_id)}.",
-        parse_mode=ParseMode.MARKDOWN,
-    )
+
+    if pago:
+        db.marcar_pago_en_revision(sol.id)
+        for admin_id in db.admins_conocidos():
+            if admin_id == user_id:
+                continue
+            try:
+                await ctx.application.bot.send_message(
+                    chat_id=admin_id,
+                    text=(
+                        f"💳 Nuevo soporte de pago para el proceso #{sol.id} "
+                        f"({S.nombres_csv(sol.servicio)}). Usa /admin para confirmarlo."
+                    ),
+                )
+            except Exception as exc:
+                logger.warning("No se pudo notificar el pago al admin %s: %s", admin_id, exc)
+        await update.message.reply_text(
+            _con_banner(
+                ctx,
+                f"✅ Comprobante recibido para el proceso #{sol.id}. Quedará "
+                "confirmado cuando lo revisemos.",
+            ),
+            parse_mode=ParseMode.MARKDOWN, reply_markup=M.proceso_kb(sol.id),
+        )
+    else:
+        db.sincronizar_estado(sol.id)
+        await update.message.reply_text(
+            _con_banner(
+                ctx,
+                f"✅ Documento recibido: *{file_name}* ({tipo}).\n"
+                f"Total subido: {db.contar_documentos(sol.id)}.",
+            ),
+            parse_mode=ParseMode.MARKDOWN, reply_markup=M.proceso_kb(sol.id),
+        )
 
 
 # --- Wizard: Iniciar solicitud (ConversationHandler) ----------------------
+#
+# Siempre se entra desde la ficha de un servicio (ini_<codigo>): el servicio
+# ya está elegido, así que el wizard solo pide 3 datos (empresa/persona,
+# identificación, teléfono). No existe combinación de servicios desde aquí:
+# el Paquete Integral cubre ese caso, y cada servicio queda como un proceso
+# independiente en "Mis procesos".
 
-PROMPTS = {
-    M.W_SERVICIO: M.texto_wizard_servicios(),
-}
+_TEL_RE = re.compile(r"^3\d{9}$")
 
-_TEL_RE = re.compile(r"^[+]?[\d\s().-]{6,}$")
+
+def _telefono_normalizado(texto: str) -> Optional[str]:
+    """Valida un celular colombiano (10 dígitos, empieza en 3).
+
+    Acepta espacios, puntos, guiones y el prefijo +57/57. Devuelve el número
+    normalizado (solo dígitos) o None si no es válido.
+    """
+    digits = re.sub(r"[^\d]", "", texto or "")
+    if digits.startswith("57") and len(digits) == 12:
+        digits = digits[2:]
+    return digits if _TEL_RE.match(digits) else None
 
 
 async def wizard_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    """Entrada al wizard desde 'Iniciar solicitud' o desde un servicio concreto.
+    """Entrada al wizard desde la ficha de un servicio (ini_<codigo>)."""
+    query = update.callback_query
+    await query.answer()
+    data = query.data or ""
+    codigo = data[len(M.CB_INICIAR_PREFIX):] if data.startswith(M.CB_INICIAR_PREFIX) else ""
+    if codigo not in S.SERVICIOS:
+        await query.edit_message_text(
+            _con_banner(ctx, "⚠️ Servicio no válido. Vuelve a *📌 Servicios* e inténtalo de nuevo."),
+            parse_mode=ParseMode.MARKDOWN, reply_markup=M.menu_principal_kb(),
+        )
+        return ConversationHandler.END
 
-    Si llega vía ``ini_<codigo>`` el servicio ya está elegido y se omite el
-    paso de selección (BR-001: el flujo depende del servicio contratado).
-    """
-    data = ""
-    if update.callback_query:
-        await update.callback_query.answer()
-        data = update.callback_query.data or ""
-
-    preseleccionado = ""
-    if data.startswith(M.CB_INICIAR_PREFIX):
-        preseleccionado = data[len(M.CB_INICIAR_PREFIX):]
-        if preseleccionado not in S.SERVICIOS:
-            preseleccionado = ""
-    ctx.user_data["w_servicio"] = preseleccionado
-    pasos = 4 if not preseleccionado else 3
+    ctx.user_data["w_servicio"] = codigo
     prompt = (
-        f"🚀 *Iniciar solicitud*\n\nPaso 1/{pasos} — Escribe el *nombre de la empresa*:"
+        "🚀 *Iniciar solicitud*\n\nPaso 1/3 — Escribe el *nombre de la empresa "
+        "o persona natural*:"
     )
-    if update.callback_query:
-        await update.callback_query.edit_message_text(
-            prompt, parse_mode=ParseMode.MARKDOWN,
-            reply_markup=M.cancelar_kb(),
-        )
-    else:
-        await update.message.reply_text(
-            prompt, parse_mode=ParseMode.MARKDOWN,
-            reply_markup=M.cancelar_kb(),
-        )
+    await query.edit_message_text(
+        _con_banner(ctx, prompt), parse_mode=ParseMode.MARKDOWN, reply_markup=M.cancelar_kb(),
+    )
     return M.W_EMPRESA
-
-
-def _pasos_wizard(ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    """3 pasos si el servicio viene preseleccionado; 4 si se elige al final."""
-    return 3 if ctx.user_data.get("w_servicio") else 4
 
 
 async def wizard_empresa(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     ctx.user_data["w_empresa"] = (update.message.text or "").strip()
     if not ctx.user_data["w_empresa"]:
-        await update.message.reply_text("El nombre de la empresa no puede estar vacío.")
+        await update.message.reply_text("El nombre no puede estar vacío. Escríbelo de nuevo:")
         return M.W_EMPRESA
-    total = _pasos_wizard(ctx)
     await update.message.reply_text(
-        f"Paso 2/{total} — Escribe el *nombre del contacto*:",
-        parse_mode=ParseMode.MARKDOWN, reply_markup=M.cancelar_kb()
+        _con_banner(ctx, "Paso 2/3 — Escribe tu *número de identificación* (cédula o NIT):"),
+        parse_mode=ParseMode.MARKDOWN, reply_markup=M.cancelar_kb(),
     )
-    return M.W_CONTACTO
+    return M.W_IDENTIFICACION
 
 
-async def wizard_contacto(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    ctx.user_data["w_contacto"] = (update.message.text or "").strip()
-    if not ctx.user_data["w_contacto"]:
-        await update.message.reply_text("El nombre del contacto no puede estar vacío.")
-        return M.W_CONTACTO
-    total = _pasos_wizard(ctx)
+async def wizard_identificacion(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    ctx.user_data["w_identificacion"] = (update.message.text or "").strip()
+    if not ctx.user_data["w_identificacion"]:
+        await update.message.reply_text("La identificación no puede estar vacía. Escríbela de nuevo:")
+        return M.W_IDENTIFICACION
     await update.message.reply_text(
-        f"Paso 3/{total} — Escribe el *número de teléfono*:",
-        parse_mode=ParseMode.MARKDOWN, reply_markup=M.cancelar_kb()
+        _con_banner(
+            ctx,
+            "Paso 3/3 — Escribe tu *número de celular* (Colombia), "
+            "ej. 3001234567 o +57 300 123 4567:",
+        ),
+        parse_mode=ParseMode.MARKDOWN, reply_markup=M.cancelar_kb(),
     )
     return M.W_TELEFONO
 
 
 async def wizard_telefono(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    tel = (update.message.text or "").strip()
-    if not _TEL_RE.match(tel):
+    tel = _telefono_normalizado(update.message.text or "")
+    if not tel:
         await update.message.reply_text(
-            "Teléfono inválido. Escribe un número con dígitos (puede incluir +, espacios, guiones)."
+            "Número inválido. Escribe un celular colombiano de 10 dígitos que "
+            "empiece en 3 (puedes incluir +57, espacios o guiones)."
         )
         return M.W_TELEFONO
     ctx.user_data["w_telefono"] = tel
-    if ctx.user_data.get("w_servicio"):
-        # Servicio preseleccionado: fin del wizard.
-        return await _finalizar_solicitud(update, ctx)
-    await update.message.reply_text(
-        PROMPTS[M.W_SERVICIO], parse_mode=ParseMode.MARKDOWN, reply_markup=M.cancelar_kb()
-    )
-    return M.W_SERVICIO
-
-
-async def wizard_servicio(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    resp = (update.message.text or "").strip()
-    try:
-        seleccion = S.parsear_seleccion(resp)
-    except ValueError as exc:
-        await update.message.reply_text(str(exc))
-        return M.W_SERVICIO
-    ctx.user_data["w_servicio"] = ",".join(seleccion)
     return await _finalizar_solicitud(update, ctx)
 
 
 async def _finalizar_solicitud(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    """Crea la solicitud y entrega el mensaje de cierre según el servicio."""
-    servicio_csv = ctx.user_data.get("w_servicio") or ""
-    seleccion = S.dividir_csv(servicio_csv)
-    if not seleccion:
+    """Crea el proceso y entrega el mensaje de cierre según el servicio."""
+    codigo = ctx.user_data.get("w_servicio") or ""
+    if codigo not in S.SERVICIOS:
         await update.message.reply_text("No se pudo determinar el servicio. Inténtalo de nuevo.")
+        ctx.user_data.pop("w_servicio", None)
         return ConversationHandler.END
 
     db = _get_db(ctx)
     user_id = update.effective_user.id
-    db.crear_solicitud(
+    sol = db.crear_solicitud(
         user_id=user_id,
         empresa=ctx.user_data["w_empresa"],
-        contacto=ctx.user_data["w_contacto"],
+        identificacion=ctx.user_data["w_identificacion"],
         telefono=ctx.user_data["w_telefono"],
-        servicio=servicio_csv,
+        servicio=codigo,
     )
-    nombres = S.nombres(seleccion)
-    cierre = _mensaje_cierre(seleccion)
+    cierre = _mensaje_cierre([codigo])
+    texto = (
+        f"✅ *Solicitud creada* (Proceso #{sol.id})\n\n"
+        f"• Servicio: {S.nombre(codigo)}\n"
+        f"• Empresa/Persona: {sol.empresa}\n"
+        f"• Identificación: {sol.identificacion}\n"
+        f"• Teléfono: {sol.telefono}\n\n"
+        f"Estado inicial: *{sol.estado_label}*.\n"
+        "Tu proceso queda en revisión hasta que confirmemos tu pago. Sube el "
+        "soporte de pago con el botón de abajo; también puedes volver a este "
+        "proceso más tarde desde *📊 Mis procesos*.\n\n"
+        f"{cierre}"
+    )
     await update.message.reply_text(
-        "✅ *Solicitud creada*\n\n"
-        f"• Empresa: {ctx.user_data['w_empresa']}\n"
-        f"• Contacto: {ctx.user_data['w_contacto']}\n"
-        f"• Teléfono: {ctx.user_data['w_telefono']}\n"
-        f"• Servicio(s): {nombres}\n\n"
-        f"{cierre}",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=M.menu_principal_kb(),
+        _con_banner(ctx, texto), parse_mode=ParseMode.MARKDOWN, reply_markup=M.proceso_kb(sol.id),
     )
-    ctx.user_data.clear()
+    for clave in ("w_servicio", "w_empresa", "w_identificacion", "w_telefono"):
+        ctx.user_data.pop(clave, None)
     return ConversationHandler.END
 
 
 def _mensaje_cierre(seleccion: list[str]) -> str:
-    """Indica al cliente qué sigue según el/los servicio(s) contratado(s)."""
+    """Detalle adicional del siguiente paso según el/los servicio(s) contratado(s)."""
     if S.PAQUETE_INTEGRAL in seleccion:
         return (
-            "Estado inicial: *En revisión*.\n\n"
-            "Como contrataste el Paquete Integral, el siguiente paso es "
-            "*📄 Subir documentos*. Luego te pediremos el área a monitorear y "
-            "las credenciales de ANNA Minería para activar el servicio completo."
+            "Como contrataste el *Paquete Integral*, cuando el pago quede "
+            "confirmado el siguiente paso es *📄 Subir documentos*. Luego te "
+            "pediremos el área a monitorear y las credenciales de ANNA Minería "
+            "para activar el servicio completo."
         )
-    partes = ["Estado inicial: *En revisión*.\n\nSiguiente paso:"]
+    partes = ["Cuando el pago quede confirmado, siguiente paso:"]
     if S.ALISTAMIENTO in seleccion:
         partes.append("• Alistamiento: *📄 Subir documentos* para la revisión formal.")
     if S.MONITOREO in seleccion:
@@ -542,16 +832,14 @@ def _mensaje_cierre(seleccion: list[str]) -> str:
 
 
 async def wizard_cancelar(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    ctx.user_data.clear()
+    for clave in ("w_servicio", "w_empresa", "w_identificacion", "w_telefono"):
+        ctx.user_data.pop(clave, None)
+    texto = _con_banner(ctx, "❌ Solicitud cancelada.")
     if update.callback_query:
         await update.callback_query.answer()
-        await update.callback_query.edit_message_text(
-            "❌ Solicitud cancelada.", reply_markup=M.menu_principal_kb()
-        )
+        await update.callback_query.edit_message_text(texto, parse_mode=ParseMode.MARKDOWN, reply_markup=M.menu_principal_kb())
     else:
-        await update.message.reply_text(
-            "❌ Solicitud cancelada.", reply_markup=M.menu_principal_kb()
-        )
+        await update.message.reply_text(texto, parse_mode=ParseMode.MARKDOWN, reply_markup=M.menu_principal_kb())
     return ConversationHandler.END
 
 
@@ -598,23 +886,20 @@ async def job_revisar_suscripciones(ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def job_avanzar_solicitudes(ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """Avanza estados de solicitudes internas por tiempo y notifica al usuario."""
+    """Avanza estados de procesos internos por tiempo y notifica al usuario."""
     app = ctx.application
     db: Database = app.bot_data["db"]
 
-    for user_id in db.listar_user_ids_con_solicitud():
-        sol = db.obtener_solicitud(user_id)
-        if not sol or sol.estado == ESTADO_COMPLETADO:
-            continue
+    for sol in db.listar_solicitudes_activas():
         estado_antes = sol.estado
-        sol_actualizada = db.sincronizar_estado(user_id)
+        sol_actualizada = db.sincronizar_estado(sol.id)
         if not sol_actualizada or sol_actualizada.estado == estado_antes:
             continue
         try:
             await app.bot.send_message(
-                chat_id=user_id,
+                chat_id=sol_actualizada.user_id,
                 text=(
-                    f"📊 Actualización de tu solicitud #{sol_actualizada.id} "
+                    f"📊 Actualización de tu proceso #{sol_actualizada.id} "
                     f"({S.nombres_csv(sol_actualizada.servicio)}):\n"
                     f"Estado: *{sol_actualizada.estado_label}*.\n"
                     f"Vigente desde: {Database.fmt_fecha(sol_actualizada.estado_desde)}."
@@ -622,7 +907,7 @@ async def job_avanzar_solicitudes(ctx: ContextTypes.DEFAULT_TYPE) -> None:
                 parse_mode=ParseMode.MARKDOWN,
             )
         except Exception as exc:
-            logger.warning("No se pudo notificar avance a %s: %s", user_id, exc)
+            logger.warning("No se pudo notificar avance a %s: %s", sol_actualizada.user_id, exc)
 
 
 # --- Construcción de la aplicación ---------------------------------------
@@ -633,25 +918,32 @@ def build_application(
     db: Optional[Database] = None,
 ) -> Application:
     app = ApplicationBuilder().token(token).build()
+    db_real = db or Database()
     app.bot_data["anm_client"] = client or ANMClient()
-    app.bot_data["db"] = db or Database()
+    app.bot_data["db"] = db_real
+
+    sandbox_path = os.environ.get("MINTRACK_SANDBOX_DB_PATH")
+    if not sandbox_path:
+        root, ext = os.path.splitext(db_real.path)
+        sandbox_path = f"{root}_sandbox{ext or '.db'}"
+    app.bot_data["db_sandbox"] = Database(sandbox_path)
 
     # Comandos.
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("menu", cmd_menu))
     app.add_handler(CommandHandler("help", cmd_help))
+    app.add_handler(CommandHandler("admin", cmd_admin))
+    app.add_handler(CommandHandler("sandbox", cmd_sandbox))
 
-    # Wizard de "Iniciar solicitud".
+    # Wizard de "Iniciar solicitud" (siempre parte de un servicio elegido).
     wizard = ConversationHandler(
         entry_points=[
-            CallbackQueryHandler(wizard_start, pattern=f"^{M.CB_INICIAR}$"),
             CallbackQueryHandler(wizard_start, pattern=f"^{M.CB_INICIAR_PREFIX}"),
         ],
         states={
             M.W_EMPRESA: [MessageHandler(filters.TEXT & ~filters.COMMAND, wizard_empresa)],
-            M.W_CONTACTO: [MessageHandler(filters.TEXT & ~filters.COMMAND, wizard_contacto)],
+            M.W_IDENTIFICACION: [MessageHandler(filters.TEXT & ~filters.COMMAND, wizard_identificacion)],
             M.W_TELEFONO: [MessageHandler(filters.TEXT & ~filters.COMMAND, wizard_telefono)],
-            M.W_SERVICIO: [MessageHandler(filters.TEXT & ~filters.COMMAND, wizard_servicio)],
         },
         fallbacks=[
             CallbackQueryHandler(wizard_cancelar, pattern=f"^({M.CB_CANCELAR}|{M.CB_VOLVER}|{M.CB_MENU})$")
@@ -660,7 +952,7 @@ def build_application(
     )
     app.add_handler(wizard)
 
-    # Callbacks del menú (excepto CB_INICIAR que entra al wizard y CB_CANCELAR).
+    # Callbacks del menú (excepto CB_INICIAR_PREFIX que entra al wizard y CB_CANCELAR).
     app.add_handler(CallbackQueryHandler(on_callback))
 
     # Documentos: PDF, imágenes, shapefiles y zip.
@@ -681,7 +973,7 @@ def build_application(
         )
     )
 
-    # Texto libre (captura código de título o reenvía menú). Debe ir al final.
+    # Texto libre (PIN admin, código de título, o reenvía menú). Debe ir al final.
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_texto))
 
     # --- Scheduler (jobs periódicos del centinela) ------------------------

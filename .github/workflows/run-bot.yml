@@ -44,6 +44,8 @@ jobs:
     timeout-minutes: 350  # algo menos de 6h para que GitHub no lo mate a la fuerza
     env:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      # PIN del panel admin (/admin). Si no se define, /admin queda deshabilitado.
+      MINTRACK_ADMIN_PIN: ${{ secrets.MINTRACK_ADMIN_PIN }}
       LOG_LEVEL: INFO
       # Persistencia de la base de datos y documentos dentro del workspace.
       MINTRACK_DB_PATH: ${{ github.workspace }}/data/mintrack.db

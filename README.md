@@ -93,43 +93,64 @@ momento con `/menu`):
 ```
 📌 Servicios              → Alistamiento documental / Monitoreo automatizado /
                             Radicación automatizada / Paquete Integral MINTRACK
-🚀 Iniciar solicitud       → Wizard de 3-4 pasos (empresa, contacto, teléfono, [servicio])
-📄 Subir documentos        → Recibe PDF, imágenes y shapefiles; los guarda y confirma
-📊 Estado de proceso       → Estado de tu solicitud (avanza automáticamente)
+📊 Mis procesos           → Lista tus procesos (uno por servicio contratado)
 ⛏️ Consultar título minero → Pide el código de expediente y muestra la ficha ANNA
 ```
 
+*Iniciar solicitud*, *Subir documentos* y *Subir soporte de pago* ya no son
+botones del menú principal: se llega a ellos desde la ficha de un servicio o
+desde el detalle de un proceso concreto en *Mis procesos*, porque un mismo
+usuario puede tener varios procesos activos a la vez.
+
 - **Servicios (BR-001)**: cuatro servicios independientes, contratables de
-  manera individual o en conjunto, y ampliables en el futuro. El catálogo vive
-  en `mintrack/servicios.py` y los menús/precios/wizard se generan desde él.
-  Al elegir un servicio se muestra su ficha completa (sin precio) con un botón
+  manera individual, y ampliables en el futuro. El catálogo vive en
+  `mintrack/servicios.py` y los menús/precios/wizard se generan desde él. Al
+  elegir un servicio se muestra su ficha completa (sin precio) con un botón
   *Ver precio*; la tarifa de cada servicio se consulta ahí, no en un menú
   separado. El *Paquete Integral MINTRACK* (BR-002) incluye los otros tres con
-  tarifa preferencial y se selecciona solo.
-- **Iniciar solicitud**: flujo paso a paso (ConversationHandler). Si se entra
-  desde la ficha de un servicio, este queda preseleccionado y el wizard omite
-  el paso de elección (3 pasos). Si se entra desde el menú principal, pide
-  empresa → contacto → teléfono → servicios (4 pasos), permitiendo elegir uno
-  (`2`) o varios combinados (`1,3`); el Paquete Integral se elige con `4`. Al
-  terminar, el mensaje indica el siguiente paso según el servicio contratado
-  (subir documentos, indicar área a monitorear o entregar credenciales).
-- **Subir documentos**: el usuario envía archivos (PDF/imagen/shape/zip) en el
-  chat; el bot los descarga a `data/docs/`, los registra en SQLite y confirma
-  la recepción. Subir el primer documento avanza el estado a *En proceso*.
-- **Estado de proceso**: muestra el estado de la solicitud activa. Los estados
-  avanzan automáticamente:
+  tarifa preferencial.
+- **Iniciar solicitud**: wizard de 3 pasos (ConversationHandler) al que se
+  entra siempre desde la ficha de un servicio, con ese servicio ya
+  preseleccionado: nombre de la empresa o persona natural → número de
+  identificación (cédula o NIT) → celular colombiano (se valida el formato).
+  Cada contratación crea un **proceso independiente**; al terminar, el bot
+  muestra directamente los botones de ese proceso (*Subir documentos* /
+  *Subir soporte de pago*), no vuelve a la lista de servicios.
+- **Mis procesos**: lista todos los procesos del usuario. Cada uno muestra
+  empresa/persona, identificación, teléfono, servicio(s), estado y estado del
+  pago, con botones para subir documentos o el soporte de pago de ese proceso
+  puntual.
+- **Pago y estados**: todo proceso nace en *En revisión (pago pendiente)* y
+  solo avanza cuando un administrador confirma el pago desde el panel admin
+  (no hay pasarela de pago automática). Una vez confirmado, los estados
+  siguientes sí avanzan automáticamente por tiempo:
   `En revisión → En proceso de aplicación → Centinela activo → Completado`.
 - **Consultar título minero**: pide el código (formato `AAA-#####`) y devuelve
   los datos del expediente y el análisis de liberación SAR generado por
   `existing_scripts/monitoreotitulo.py`.
 
+### Panel de administrador y modo prueba
+
+- **`/admin`**: pide un PIN (variable de entorno `MINTRACK_ADMIN_PIN`); una
+  vez autenticado, muestra todos los procesos de todos los usuarios con
+  acciones por proceso: confirmar el soporte de pago, avanzar/retroceder el
+  estado manualmente y reenviar los documentos subidos al chat del admin. Si
+  `MINTRACK_ADMIN_PIN` no está configurada, `/admin` queda deshabilitado.
+- **`/sandbox`**: solo para quien ya se autenticó con `/admin`. Activa un modo
+  de pruebas que usa una base de datos SQLite separada
+  (`MINTRACK_SANDBOX_DB_PATH`, por defecto `<db>_sandbox.db`) y por lo tanto
+  no genera notificaciones reales a nadie ni mezcla datos de prueba con datos
+  reales. Se avisa con un banner "🧪 MODO PRUEBA" en cada pantalla mientras
+  está activo; `/sandbox` de nuevo vuelve al modo real.
+
 ### Persistencia
 
-Las solicitudes, documentos y estados se guardan en **SQLite** (`data/mintrack.db`).
+Los procesos, documentos y estados se guardan en **SQLite** (`data/mintrack.db`).
 Los archivos subidos se guardan en `data/docs/`. Las rutas se configuran con las
 variables de entorno `MINTRACK_DB_PATH` y `MINTRACK_DOC_DIR` (por defecto,
-`./data/`). En el despliegue de GitHub Actions, la carpeta `data/` se conserva
-entre reinicios mediante la caché del workflow (ver limitaciones abajo).
+`./data/`). El modo `/sandbox` usa una base aparte (`MINTRACK_SANDBOX_DB_PATH`).
+En el despliegue de GitHub Actions, la carpeta `data/` se conserva entre
+reinicios mediante la caché del workflow (ver limitaciones abajo).
 
 ### Crear el bot y obtener el token (con @BotFather)
 
@@ -171,10 +192,13 @@ El repo incluye dos workflows en `.github/workflows/`:
 1. Sube el proyecto a un repositorio en GitHub.
 2. Ve a **Settings → Secrets and variables → Actions → New repository secret**.
 3. Nombre: `TELEGRAM_BOT_TOKEN`. Valor: el token que te dio @BotFather.
-4. Ve a la pestaña **Actions**, selecciona el workflow **Run MinTrack Telegram
+4. (Opcional, para el panel admin) Crea otro secret `MINTRACK_ADMIN_PIN` con
+   el PIN que quieras usar en `/admin`. Sin este secret, `/admin` y `/sandbox`
+   quedan deshabilitados.
+5. Ve a la pestaña **Actions**, selecciona el workflow **Run MinTrack Telegram
    Bot** y pulsa **Run workflow** para iniciarlo de inmediato (no esperes al
    cron). Verás el log en vivo.
-5. Habla con tu bot en Telegram.
+6. Habla con tu bot en Telegram.
 
 ### ⚠️ Limitaciones del plan gratuito de GitHub Actions
 
