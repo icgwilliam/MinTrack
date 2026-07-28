@@ -171,34 +171,23 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await _editar_menu(query, M.TEXTO_MENU, M.menu_principal_kb())
     elif data == M.CB_SERVICIOS:
         await _editar_menu(query, M.TEXTO_SERVICIOS, M.servicios_kb())
-    elif data == M.CB_SERVICIOS_MAS:
-        key = ctx.user_data.get("servicio_visto") or next(iter(S.SERVICIOS))
-        await _editar_menu(query, M.texto_servicio_detalle(key), M.servicios_detalle_kb(key))
+    elif data.startswith(M.CB_PRECIO_PREFIX):
+        key = data[len(M.CB_PRECIO_PREFIX):]
+        if key in S.SERVICIOS:
+            ctx.user_data["servicio_visto"] = key
+            await _editar_menu(query, M.texto_precio_servicio(key), M.precio_kb(key))
     elif data.startswith(M.CB_SERVICIO_PREFIX):
         key = data[len(M.CB_SERVICIO_PREFIX):]
         if key in S.SERVICIOS:
             ctx.user_data["servicio_visto"] = key
-            await _editar_menu(
-                query, M.texto_servicio_resumen(key), M.servicios_detalle_kb(key)
-            )
-    elif data == M.CB_PRECIOS:
-        await _editar_menu(query, M.TEXTO_PRECIOS, M.precios_kb())
-    elif data == M.CB_PRECIOS_MAS:
-        await _editar_menu(query, M.TEXTO_PRECIOS_MAS, M.precios_kb())
+            await _editar_menu(query, M.texto_servicio(key), M.servicio_kb(key))
     elif data == M.CB_ESTADO:
         await _mostrar_estado(update, ctx)
     elif data == M.CB_CONSULTAR:
         await _iniciar_consulta_titulo(update, ctx)
     elif data == M.CB_SUBIR:
         await _mostrar_subir_documentos(update, ctx)
-    elif data == M.CB_CENTINELA:
-        await _iniciar_suscripcion(update, ctx)
-    elif data == M.CB_MIS_SUBS:
-        await _mostrar_suscripciones(update, ctx)
-    elif data.startswith(M.CB_DESUSCRIBIR_PREFIX):
-        codigo = data[len(M.CB_DESUSCRIBIR_PREFIX):]
-        await _desuscribir(update, ctx, codigo)
-    # CB_INICIAR y CB_CANCELAR se manejan en el ConversationHandler.
+    # CB_INICIAR, CB_INICIAR_PREFIX y CB_CANCELAR se manejan en el ConversationHandler.
 
 
 # --- Estado de proceso ----------------------------------------------------
@@ -235,7 +224,6 @@ async def _mostrar_estado(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> Non
 # El usuario entra a "Consultar título minero", se le pide el código por chat.
 # Guardamos un flag en user_data para capturar el próximo mensaje de texto.
 FLAG_CONSULTA = "esperando_codigo_titulo"
-FLAG_SUSCRIPCION = "esperando_codigo_suscripcion"
 
 
 async def _iniciar_consulta_titulo(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -253,10 +241,9 @@ async def _iniciar_consulta_titulo(update: Update, ctx: ContextTypes.DEFAULT_TYP
 
 
 async def on_texto(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """Captura mensajes de texto fuera del wizard.
+    """Captura el código de título cuando el usuario está en esa espera.
 
-    Si el usuario está esperando para escribir el código de un título, lo
-    consulta; si está esperando para suscribirse, lo hace; si no, muestra el menú.
+    En cualquier otro caso, reenvía el menú principal.
     """
     if ctx.user_data.get(FLAG_CONSULTA):
         ctx.user_data[FLAG_CONSULTA] = False
@@ -270,104 +257,8 @@ async def on_texto(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await _consultar_titulo(update, ctx, codigo)
         return
 
-    if ctx.user_data.get(FLAG_SUSCRIPCION):
-        ctx.user_data[FLAG_SUSCRIPCION] = False
-        codigo = (update.message.text or "").strip().upper()
-        if not codigo:
-            await update.message.reply_text(
-                "Código vacío. Inténtalo de nuevo o usa /menu.",
-                reply_markup=M.menu_principal_kb(),
-            )
-            return
-        await _suscribir(update, ctx, codigo)
-        return
-
     # En cualquier otro caso, reenvía el menú.
     await update.message.reply_text(M.TEXTO_MENU, reply_markup=M.menu_principal_kb())
-
-
-# --- Centinela (suscripciones a expedientes) -----------------------------
-
-async def _iniciar_suscripcion(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    ctx.user_data[FLAG_SUSCRIPCION] = True
-    await _editar_menu(query, M.TEXTO_CENTINELA, M.centinela_kb())
-
-
-async def _suscribir(update: Update, ctx: ContextTypes.DEFAULT_TYPE, codigo: str) -> None:
-    client = _get_client(ctx)
-    db = _get_db(ctx)
-    user_id = update.effective_user.id
-
-    # Verificar que el expediente existe antes de suscribir.
-    try:
-        titulos = await asyncio.to_thread(
-            client.consultar_por_expediente, codigo, return_geometry=False
-        )
-    except ANMError as exc:
-        await update.message.reply_text(f"⚠️ Error consultando la ANM: {exc}")
-        return
-
-    if not titulos:
-        await update.message.reply_text(
-            f"No se encontró el título '{codigo}'. No se pudo suscribir.",
-            reply_markup=M.menu_principal_kb(),
-        )
-        return
-
-    creado = db.suscribir(user_id, codigo)
-    # Guarda snapshot inicial si no existe.
-    if db.obtener_snapshot(codigo) is None:
-        C.actualizar_snapshot(db, titulos[0])
-
-    if creado:
-        msg = (
-            f"✅ Te suscribiste a *{codigo}*.\n\nNotificaré automáticamente "
-            "publicaciones SAR, estado, etapa y vencimientos próximos."
-        )
-    else:
-        msg = f"ℹ️ Ya estabas suscrito a *{codigo}*. Suscripción reactivada."
-    await update.message.reply_text(
-        msg, parse_mode=ParseMode.MARKDOWN, reply_markup=M.menu_principal_kb()
-    )
-
-
-async def _mostrar_suscripciones(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    db = _get_db(ctx)
-    subs = db.listar_suscripciones(update.effective_user.id)
-    if not subs:
-        await _editar_menu(
-            query,
-            "🔔 *Centinela*\n\nNo tienes suscripciones activas.\n\n"
-            "Pulsa *🔔 Centinela* para suscribirte a un expediente.",
-            M.centinela_kb(),
-        )
-        return
-    lines = ["🔔 *Tus suscripciones activas:*"]
-    rows: list[list[InlineKeyboardButton]] = []
-    for s in subs:
-        snap = db.obtener_snapshot(s.codigo_exp)
-        estado = snap.titulo_est if snap else "—"
-        area = f"{snap.area_ha:.2f} ha" if snap and snap.area_ha is not None else "—"
-        lines.append(f"• {s.codigo_exp} — {estado} — {area}")
-        rows.append(
-            [InlineKeyboardButton(f"🔕 Cancelar {s.codigo_exp}",
-                                  callback_data=f"{M.CB_DESUSCRIBIR_PREFIX}{s.codigo_exp}")]
-        )
-    kb = M._con_volver(rows)
-    await _editar_menu(query, "\n".join(lines), kb)
-
-
-async def _desuscribir(update: Update, ctx: ContextTypes.DEFAULT_TYPE, codigo: str) -> None:
-    query = update.callback_query
-    db = _get_db(ctx)
-    ok = db.desuscribir(update.effective_user.id, codigo)
-    if ok:
-        await query.answer(f"Suscripción a {codigo} cancelada.", show_alert=True)
-    else:
-        await query.answer(f"No tenías suscripción activa a {codigo}.", show_alert=True)
-    await _mostrar_suscripciones(update, ctx)
 
 
 async def _consultar_titulo(update: Update, ctx: ContextTypes.DEFAULT_TYPE, codigo: str) -> None:
@@ -496,9 +387,6 @@ async def on_documento(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 # --- Wizard: Iniciar solicitud (ConversationHandler) ----------------------
 
 PROMPTS = {
-    M.W_EMPRESA: "🚀 *Iniciar solicitud*\n\nPaso 1/4 — Escribe el *nombre de la empresa*:",
-    M.W_CONTACTO: "Paso 2/4 — Escribe el *nombre del contacto*:",
-    M.W_TELEFONO: "Paso 3/4 — Escribe el *número de teléfono*:",
     M.W_SERVICIO: M.texto_wizard_servicios(),
 }
 
@@ -506,19 +394,42 @@ _TEL_RE = re.compile(r"^[+]?[\d\s().-]{6,}$")
 
 
 async def wizard_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
-    """Entrada al wizard desde callback 'Iniciar solicitud' o comando."""
+    """Entrada al wizard desde 'Iniciar solicitud' o desde un servicio concreto.
+
+    Si llega vía ``ini_<codigo>`` el servicio ya está elegido y se omite el
+    paso de selección (BR-001: el flujo depende del servicio contratado).
+    """
+    data = ""
     if update.callback_query:
         await update.callback_query.answer()
+        data = update.callback_query.data or ""
+
+    preseleccionado = ""
+    if data.startswith(M.CB_INICIAR_PREFIX):
+        preseleccionado = data[len(M.CB_INICIAR_PREFIX):]
+        if preseleccionado not in S.SERVICIOS:
+            preseleccionado = ""
+    ctx.user_data["w_servicio"] = preseleccionado
+    pasos = 4 if not preseleccionado else 3
+    prompt = (
+        f"🚀 *Iniciar solicitud*\n\nPaso 1/{pasos} — Escribe el *nombre de la empresa*:"
+    )
+    if update.callback_query:
         await update.callback_query.edit_message_text(
-            PROMPTS[M.W_EMPRESA], parse_mode=ParseMode.MARKDOWN,
+            prompt, parse_mode=ParseMode.MARKDOWN,
             reply_markup=M.cancelar_kb(),
         )
     else:
         await update.message.reply_text(
-            PROMPTS[M.W_EMPRESA], parse_mode=ParseMode.MARKDOWN,
+            prompt, parse_mode=ParseMode.MARKDOWN,
             reply_markup=M.cancelar_kb(),
         )
     return M.W_EMPRESA
+
+
+def _pasos_wizard(ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """3 pasos si el servicio viene preseleccionado; 4 si se elige al final."""
+    return 3 if ctx.user_data.get("w_servicio") else 4
 
 
 async def wizard_empresa(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
@@ -526,8 +437,10 @@ async def wizard_empresa(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
     if not ctx.user_data["w_empresa"]:
         await update.message.reply_text("El nombre de la empresa no puede estar vacío.")
         return M.W_EMPRESA
+    total = _pasos_wizard(ctx)
     await update.message.reply_text(
-        PROMPTS[M.W_CONTACTO], parse_mode=ParseMode.MARKDOWN, reply_markup=M.cancelar_kb()
+        f"Paso 2/{total} — Escribe el *nombre del contacto*:",
+        parse_mode=ParseMode.MARKDOWN, reply_markup=M.cancelar_kb()
     )
     return M.W_CONTACTO
 
@@ -537,8 +450,10 @@ async def wizard_contacto(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
     if not ctx.user_data["w_contacto"]:
         await update.message.reply_text("El nombre del contacto no puede estar vacío.")
         return M.W_CONTACTO
+    total = _pasos_wizard(ctx)
     await update.message.reply_text(
-        PROMPTS[M.W_TELEFONO], parse_mode=ParseMode.MARKDOWN, reply_markup=M.cancelar_kb()
+        f"Paso 3/{total} — Escribe el *número de teléfono*:",
+        parse_mode=ParseMode.MARKDOWN, reply_markup=M.cancelar_kb()
     )
     return M.W_TELEFONO
 
@@ -551,6 +466,9 @@ async def wizard_telefono(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
         )
         return M.W_TELEFONO
     ctx.user_data["w_telefono"] = tel
+    if ctx.user_data.get("w_servicio"):
+        # Servicio preseleccionado: fin del wizard.
+        return await _finalizar_solicitud(update, ctx)
     await update.message.reply_text(
         PROMPTS[M.W_SERVICIO], parse_mode=ParseMode.MARKDOWN, reply_markup=M.cancelar_kb()
     )
@@ -564,8 +482,17 @@ async def wizard_servicio(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
     except ValueError as exc:
         await update.message.reply_text(str(exc))
         return M.W_SERVICIO
-    servicio_csv = ",".join(seleccion)
-    ctx.user_data["w_servicio"] = servicio_csv
+    ctx.user_data["w_servicio"] = ",".join(seleccion)
+    return await _finalizar_solicitud(update, ctx)
+
+
+async def _finalizar_solicitud(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    """Crea la solicitud y entrega el mensaje de cierre según el servicio."""
+    servicio_csv = ctx.user_data.get("w_servicio") or ""
+    seleccion = S.dividir_csv(servicio_csv)
+    if not seleccion:
+        await update.message.reply_text("No se pudo determinar el servicio. Inténtalo de nuevo.")
+        return ConversationHandler.END
 
     db = _get_db(ctx)
     user_id = update.effective_user.id
@@ -577,14 +504,14 @@ async def wizard_servicio(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
         servicio=servicio_csv,
     )
     nombres = S.nombres(seleccion)
+    cierre = _mensaje_cierre(seleccion)
     await update.message.reply_text(
         "✅ *Solicitud creada*\n\n"
         f"• Empresa: {ctx.user_data['w_empresa']}\n"
         f"• Contacto: {ctx.user_data['w_contacto']}\n"
         f"• Teléfono: {ctx.user_data['w_telefono']}\n"
         f"• Servicio(s): {nombres}\n\n"
-        "Estado inicial: *En revisión*.\n\n"
-        "Ahora puedes *📄 Subir documentos* para avanzar tu proceso.",
+        f"{cierre}",
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=M.menu_principal_kb(),
     )
@@ -592,13 +519,39 @@ async def wizard_servicio(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int
     return ConversationHandler.END
 
 
+def _mensaje_cierre(seleccion: list[str]) -> str:
+    """Indica al cliente qué sigue según el/los servicio(s) contratado(s)."""
+    if S.PAQUETE_INTEGRAL in seleccion:
+        return (
+            "Estado inicial: *En revisión*.\n\n"
+            "Como contrataste el Paquete Integral, el siguiente paso es "
+            "*📄 Subir documentos*. Luego te pediremos el área a monitorear y "
+            "las credenciales de ANNA Minería para activar el servicio completo."
+        )
+    partes = ["Estado inicial: *En revisión*.\n\nSiguiente paso:"]
+    if S.ALISTAMIENTO in seleccion:
+        partes.append("• Alistamiento: *📄 Subir documentos* para la revisión formal.")
+    if S.MONITOREO in seleccion:
+        partes.append("• Monitoreo: te pediremos el *código del área* a vigilar.")
+    if S.RADICACION in seleccion:
+        partes.append(
+            "• Radicación: *📄 Subir documentos* y luego entregar credenciales "
+            "de ANNA Minería."
+        )
+    return "\n".join(partes)
+
+
 async def wizard_cancelar(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> int:
+    ctx.user_data.clear()
     if update.callback_query:
         await update.callback_query.answer()
-    ctx.user_data.clear()
-    await (update.callback_query or update.message).reply_text(
-        "❌ Solicitud cancelada.", reply_markup=M.menu_principal_kb()
-    )
+        await update.callback_query.edit_message_text(
+            "❌ Solicitud cancelada.", reply_markup=M.menu_principal_kb()
+        )
+    else:
+        await update.message.reply_text(
+            "❌ Solicitud cancelada.", reply_markup=M.menu_principal_kb()
+        )
     return ConversationHandler.END
 
 
@@ -690,7 +643,10 @@ def build_application(
 
     # Wizard de "Iniciar solicitud".
     wizard = ConversationHandler(
-        entry_points=[CallbackQueryHandler(wizard_start, pattern=f"^{M.CB_INICIAR}$")],
+        entry_points=[
+            CallbackQueryHandler(wizard_start, pattern=f"^{M.CB_INICIAR}$"),
+            CallbackQueryHandler(wizard_start, pattern=f"^{M.CB_INICIAR_PREFIX}"),
+        ],
         states={
             M.W_EMPRESA: [MessageHandler(filters.TEXT & ~filters.COMMAND, wizard_empresa)],
             M.W_CONTACTO: [MessageHandler(filters.TEXT & ~filters.COMMAND, wizard_contacto)],

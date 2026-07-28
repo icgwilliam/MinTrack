@@ -29,6 +29,7 @@ class Servicio:
     resumen: str
     detalle: str
     precio: str
+    siguiente_paso: str = ""
     incluye: tuple[str, ...] = ()
 
 
@@ -46,7 +47,7 @@ SERVICIOS: dict[str, Servicio] = {
             "para tu solicitud minera."
         ),
         detalle=(
-            "Incluye (BR-011):\n"
+            "Incluye:\n"
             "• Verificar que los documentos existan.\n"
             "• Verificar vigencia.\n"
             "• Revisar firmas.\n"
@@ -56,6 +57,11 @@ SERVICIOS: dict[str, Servicio] = {
             "evaluación de viabilidad minera."
         ),
         precio="$1.000.000",
+        siguiente_paso=(
+            "Carga los documentos que quieres que revisemos. "
+            "Nos encargaremos de verificar existencia, vigencia, firmas y "
+            "formatos, y de organizarlos."
+        ),
     ),
     MONITOREO: Servicio(
         codigo=MONITOREO,
@@ -65,13 +71,18 @@ SERVICIOS: dict[str, Servicio] = {
             "su publicación para liberación."
         ),
         detalle=(
-            "• Consultas automáticas cada 6 horas en ANNA Minería (BR-003).\n"
+            "• Consultas automáticas cada 6 horas en ANNA Minería.\n"
             "• Alertas por liberación de áreas, cambios de estado y novedades.\n"
             "• Notificación al cliente y al administrador por Telegram.\n"
             "• Reportes periódicos configurables (novedades, semanal, "
             "quincenal o mensual)."
         ),
         precio="$2.000.000 por área / año",
+        siguiente_paso=(
+            "Indica el código del área (expediente) que deseas monitorear. "
+            "Realizaremos consultas automáticas y te avisaremos de cualquier "
+            "novedad o liberación programada."
+        ),
     ),
     RADICACION: Servicio(
         codigo=RADICACION,
@@ -81,15 +92,20 @@ SERVICIOS: dict[str, Servicio] = {
             "área sea programada para liberación."
         ),
         detalle=(
-            "Se ejecuta automáticamente cuando (BR-012):\n"
+            "Se ejecuta automáticamente cuando:\n"
             "• El servicio está contratado y el pago validado.\n"
             "• La documentación está completa y vigente.\n"
             "• El usuario de ANNA Minería está activo.\n"
             "• Existe al menos un PIN disponible.\n\n"
             "Si ANNA presenta fallas, el sistema reintenta automáticamente "
-            "mientras el área continúe disponible (BR-013)."
+            "mientras el área continúe disponible."
         ),
         precio="$20.000.000",
+        siguiente_paso=(
+            "Completa los datos de tu empresa y contacto. Luego deberás "
+            "cargar la documentación y entregar las credenciales de ANNA "
+            "Minería para habilitar la radicación automática."
+        ),
     ),
     PAQUETE_INTEGRAL: Servicio(
         codigo=PAQUETE_INTEGRAL,
@@ -99,7 +115,7 @@ SERVICIOS: dict[str, Servicio] = {
             "automatizada, con tarifa preferencial."
         ),
         detalle=(
-            "Incluye (BR-002):\n"
+            "Incluye:\n"
             "• Alistamiento documental.\n"
             "• Monitoreo automatizado.\n"
             "• Radicación automatizada.\n\n"
@@ -107,6 +123,11 @@ SERVICIOS: dict[str, Servicio] = {
         ),
         precio="$20.000.000 (tarifa preferencial)",
         incluye=(ALISTAMIENTO, MONITOREO, RADICACION),
+        siguiente_paso=(
+            "Completa los datos de tu empresa y contacto. Luego carga la "
+            "documentación, indica el área a monitorear y entrega las "
+            "credenciales de ANNA Minería para activar el servicio completo."
+        ),
     ),
 }
 

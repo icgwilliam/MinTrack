@@ -14,6 +14,7 @@ os.environ.setdefault(
 
 from mintrack import servicios as S
 from mintrack import menu as M
+from mintrack import bot as B
 from mintrack.db import Database
 
 
@@ -87,9 +88,10 @@ class MenuServiciosTests(unittest.TestCase):
 
     def test_textos_precios_desde_catalogo(self) -> None:
         for servicio in S.SERVICIOS.values():
-            self.assertIn(servicio.nombre, M.TEXTO_PRECIOS)
-            self.assertIn(servicio.precio, M.TEXTO_PRECIOS)
-            self.assertIn(servicio.nombre, M.TEXTO_PRECIOS_MAS)
+            texto = M.texto_precio_servicio(servicio.codigo)
+            self.assertIn(servicio.nombre, texto)
+            self.assertIn(servicio.precio, texto)
+            self.assertIn(servicio.siguiente_paso, texto)
 
     def test_texto_wizard_lista_opciones(self) -> None:
         texto = M.texto_wizard_servicios()
@@ -97,11 +99,17 @@ class MenuServiciosTests(unittest.TestCase):
             self.assertIn(servicio.nombre, texto)
         self.assertIn("1,3", texto)
 
-    def test_resumen_y_detalle(self) -> None:
-        resumen = M.texto_servicio_resumen(S.MONITOREO)
-        self.assertIn("Monitoreo automatizado", resumen)
-        detalle = M.texto_servicio_detalle(S.ALISTAMIENTO)
-        self.assertIn("BR-011", detalle)
+    def test_ficha_servicio_sin_referencias_internas(self) -> None:
+        for codigo in S.SERVICIOS:
+            ficha = M.texto_servicio(codigo)
+            self.assertNotIn("BR-", ficha)
+
+    def test_teclado_servicio_tiene_ver_precio_e_iniciar(self) -> None:
+        kb = M.servicio_kb(S.MONITOREO)
+        callbacks = [b.callback_data for row in kb.inline_keyboard for b in row]
+        self.assertIn(f"{M.CB_PRECIO_PREFIX}{S.MONITOREO}", callbacks)
+        self.assertIn(f"{M.CB_INICIAR_PREFIX}{S.MONITOREO}", callbacks)
+        self.assertIn(M.CB_VOLVER, callbacks)
 
 
 class SolicitudMultiServicioTests(unittest.TestCase):
@@ -126,6 +134,29 @@ class SolicitudMultiServicioTests(unittest.TestCase):
             self.assertIsNotNone(sol)
             self.assertEqual(S.nombres_csv(sol.servicio), "Monitoreo automatizado")
             db.close()
+
+
+class FlujoSolicitudTests(unittest.TestCase):
+    def test_mensaje_cierre_por_servicio(self) -> None:
+        self.assertIn("Subir documentos", B._mensaje_cierre([S.ALISTAMIENTO]))
+        self.assertIn("código del área", B._mensaje_cierre([S.MONITOREO]))
+        self.assertIn("credenciales", B._mensaje_cierre([S.RADICACION]))
+        paquete = B._mensaje_cierre([S.PAQUETE_INTEGRAL])
+        self.assertIn("Paquete Integral", paquete)
+        self.assertIn("Subir documentos", paquete)
+
+    def test_mensaje_cierre_combinado(self) -> None:
+        texto = B._mensaje_cierre([S.ALISTAMIENTO, S.MONITOREO])
+        self.assertIn("Subir documentos", texto)
+        self.assertIn("código del área", texto)
+
+    def test_menu_principal_sin_precios_ni_centinela(self) -> None:
+        kb = M.menu_principal_kb()
+        callbacks = [b.callback_data for row in kb.inline_keyboard for b in row]
+        self.assertNotIn(M.CB_PRECIOS if hasattr(M, "CB_PRECIOS") else "pre", callbacks)
+        self.assertNotIn("cnt", callbacks)
+        self.assertIn(M.CB_SERVICIOS, callbacks)
+        self.assertIn(M.CB_INICIAR, callbacks)
 
 
 if __name__ == "__main__":

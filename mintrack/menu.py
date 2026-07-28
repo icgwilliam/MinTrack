@@ -1,13 +1,12 @@
 """Definición de menús (inline keyboards) y textos del bot de Telegram.
 
-Estructura del menú principal (5 opciones) más la consulta de títulos mineros:
+Estructura del menú principal:
 
     1. Servicios
-    2. Precios
-    3. Iniciar solicitud
-    4. Subir documentos
-    5. Estado de proceso
-    6. Consultar título minero   <- mantiene la funcionalidad original
+    2. Iniciar solicitud
+    3. Subir documentos
+    4. Estado de proceso
+    5. Consultar título minero
 
 Cada botón usa un ``callback_data`` prefijado para enrutamiento en el bot.
 """
@@ -22,16 +21,13 @@ from . import servicios as S
 
 CB_MENU = "menu"
 CB_SERVICIOS = "srv"
-CB_SERVICIO_PREFIX = "srv_"   # srv_<codigo> muestra el resumen del servicio
-CB_SERVICIOS_MAS = "srv_mas"
-CB_PRECIOS = "pre"
-CB_PRECIOS_MAS = "pre_mas"
+CB_SERVICIO_PREFIX = "srv_"    # srv_<codigo> muestra la ficha del servicio
+CB_PRECIO_PREFIX = "pre_"      # pre_<codigo> muestra el precio de un servicio
 CB_INICIAR = "ini"
+CB_INICIAR_PREFIX = "ini_"     # ini_<codigo> inicia solicitud con ese servicio
 CB_SUBIR = "sub"
 CB_ESTADO = "est"
-CB_CONSULTAR = "con"          # consultar título minero
-CB_CENTINELA = "cnt"          # suscribirse / mis suscripciones (menú centinela)
-CB_MIS_SUBS = "cnt_mis"
+CB_CONSULTAR = "con"           # consultar título minero
 CB_VOLVER = "back"
 CB_CANCELAR = "cancel"
 
@@ -45,12 +41,10 @@ def menu_principal_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("📌 Servicios", callback_data=CB_SERVICIOS)],
-            [InlineKeyboardButton("💰 Precios", callback_data=CB_PRECIOS)],
             [InlineKeyboardButton("🚀 Iniciar solicitud", callback_data=CB_INICIAR)],
             [InlineKeyboardButton("📄 Subir documentos", callback_data=CB_SUBIR)],
             [InlineKeyboardButton("📊 Estado de proceso", callback_data=CB_ESTADO)],
             [InlineKeyboardButton("⛏️ Consultar título minero", callback_data=CB_CONSULTAR)],
-            [InlineKeyboardButton("🔔 Centinela (suscribir)", callback_data=CB_CENTINELA)],
         ]
     )
 
@@ -70,22 +64,22 @@ def servicios_kb() -> InlineKeyboardMarkup:
     )
 
 
-def servicios_detalle_kb(servicio: str) -> InlineKeyboardMarkup:
+def servicio_kb(codigo: str) -> InlineKeyboardMarkup:
+    """Ficha del servicio: ver precio e iniciar solicitud con ese servicio."""
     return _con_volver(
         [
             [
-                InlineKeyboardButton("🔍 Ver más", callback_data=CB_SERVICIOS_MAS),
-                InlineKeyboardButton("🚀 Iniciar solicitud", callback_data=CB_INICIAR),
+                InlineKeyboardButton("💰 Ver precio", callback_data=f"{CB_PRECIO_PREFIX}{codigo}"),
+                InlineKeyboardButton("🚀 Iniciar solicitud", callback_data=f"{CB_INICIAR_PREFIX}{codigo}"),
             ],
         ]
     )
 
 
-def precios_kb() -> InlineKeyboardMarkup:
+def precio_kb(codigo: str) -> InlineKeyboardMarkup:
     return _con_volver(
         [
-            [InlineKeyboardButton("¿Qué incluye cada servicio?", callback_data=CB_PRECIOS_MAS)],
-            [InlineKeyboardButton("🚀 Iniciar solicitud", callback_data=CB_INICIAR)],
+            [InlineKeyboardButton("🚀 Iniciar solicitud", callback_data=f"{CB_INICIAR_PREFIX}{codigo}")],
         ]
     )
 
@@ -98,20 +92,9 @@ def consultar_kb() -> InlineKeyboardMarkup:
     return _con_volver([])
 
 
-def centinela_kb() -> InlineKeyboardMarkup:
-    return _con_volver(
-        [
-            [InlineKeyboardButton("📋 Mis suscripciones", callback_data=CB_MIS_SUBS)],
-        ]
-    )
-
-
-def desuscribir_kb(codigo_exp: str) -> InlineKeyboardMarkup:
-    """Keyboard con un botón para cancelar la suscripción a un expediente."""
-    return _con_volver(
-        [[InlineKeyboardButton(f"🔕 Cancelar suscripción a {codigo_exp}",
-                               callback_data=f"{CB_DESUSCRIBIR_PREFIX}{codigo_exp}")]]
-    )
+def desuscribir_kb(codigo_exp: str) -> str:
+    """Callback para cancelar la suscripción a un expediente (uso interno)."""
+    return f"{CB_DESUSCRIBIR_PREFIX}{codigo_exp}"
 
 
 def cancelar_kb() -> InlineKeyboardMarkup:
@@ -134,39 +117,20 @@ TEXTO_MENU = (
 TEXTO_SERVICIOS = (
     "📌 *Servicios*\n\n"
     "Cuatro servicios independientes que puedes contratar de manera individual "
-    "o en conjunto. Elige uno para ver el resumen:"
+    "o en conjunto. Elige uno para ver la información completa:"
 )
 
-TEXTO_PRECIOS = "💰 *Precios*\n\n" + "\n".join(
-    f"• *{s.nombre}:* {s.precio}" for s in S.SERVICIOS.values()
-) + "\n"
+
+def texto_servicio(codigo: str) -> str:
+    """Ficha completa del servicio (resumen + detalle), sin precio."""
+    s = S.SERVICIOS[codigo]
+    return f"📌 *{s.nombre}*\n\n{s.resumen}\n\n{s.detalle}"
 
 
-def texto_servicio_resumen(key: str) -> str:
-    s = S.SERVICIOS[key]
-    return f"📌 *{s.nombre}*\n\n{s.resumen}\n\n💰 {s.precio}"
-
-
-def texto_servicio_detalle(key: str) -> str:
-    s = S.SERVICIOS[key]
-    return f"📌 *{s.nombre}* — detalle\n\n{s.detalle}\n\n💰 {s.precio}"
-
-
-TEXTO_PRECIOS_MAS = "💰 *Precios — qué incluye*\n\n" + "\n\n".join(
-    f"• *{s.nombre} ({s.precio}):* {s.resumen}" for s in S.SERVICIOS.values()
-)
-
-TEXTO_CENTINELA = (
-    "🔔 *Centinela*\n\n"
-    "Suscríbete a un código de expediente para recibir notificaciones "
-    "automáticas cuando:\n"
-    "• Se libere parte del área del título (reducción de ha).\n"
-    "• Cambie el estado del título (ej. Activo → En liquidación).\n"
-    "• Cambie la etapa (ej. Exploración → Explotación).\n"
-    "• Se acerque el vencimiento (<=30 días).\n\n"
-    "Para suscribirte escribe el código del expediente "
-    "(formato AAA-#####, ej. ICQ-09083)."
-)
+def texto_precio_servicio(codigo: str) -> str:
+    """Tarifa del servicio con el próximo paso del flujo de contratación."""
+    s = S.SERVICIOS[codigo]
+    return f"💰 *{s.nombre}*\n\nTarifa: *{s.precio}*\n\n{s.siguiente_paso}"
 
 
 # Estados del wizard de "Iniciar solicitud" (ConversationHandler).
