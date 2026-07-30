@@ -600,11 +600,14 @@ async def on_texto(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         token = f"inv_{secrets.token_urlsafe(8)}"
         db.crear_invitacion(token=token, telefono=tel, creado_por=update.effective_user.id)
         link = f"https://t.me/{ctx.bot.username}?start={token}"
+        # Sin parse_mode a propósito: el token puede traer "_", que en
+        # Markdown abre cursiva y, si no cierra, corrompe el link entero
+        # (el invitado ve "nombre de usuario no encontrado" al abrirlo).
         await update.message.reply_text(
-            f"✅ Invitación creada para *{tel}*.\n\nCompártele este link por "
+            f"✅ Invitación creada para {tel}.\n\nCompártele este link por "
             f"WhatsApp o SMS:\n{link}\n\nCuando la persona lo abra y pulse "
-            "*Iniciar*, quedará registrada como aceptada y te avisaré aquí.",
-            parse_mode=ParseMode.MARKDOWN, reply_markup=M.admin_volver_kb(),
+            "Iniciar, quedará registrada como aceptada y te avisaré aquí.",
+            reply_markup=M.admin_volver_kb(),
         )
         return
 
